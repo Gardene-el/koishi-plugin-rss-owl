@@ -295,16 +295,16 @@ ${targetInfo}
     .command('rssowl <url:text>', '订阅 RSS/源')
     .alias('rsso')
     .usage(usage)
-    .option('list', '-l [content] 查看订阅列表(详情) [已移至 rsso.list 子命令]')
-    .option('remove', '-r <content> [订阅id|关键字] 删除订阅 [已移至 rsso.remove 子命令]')
+    .option('list', '-l [content] 查看订阅列表(详情) [已移至 rsso.list 子命令，使用列表序号]')
+    .option('remove', '-r <序号> 删除订阅 [已移至 rsso.remove 子命令，使用列表序号]')
     .option('removeAll', '删除全部订阅 [已移至 rsso.remove --all 子命令]')
-    .option('follow', '-f <content> [订阅id|关键字] 关注订阅 [已移至 rsso.follow 子命令]')
-    .option('followAll', '<content> [订阅id|关键字] 在该订阅更新时提醒所有人 [已移至 rsso.follow --all 子命令]')
+    .option('follow', '-f <序号> 关注订阅 [已移至 rsso.follow 子命令，使用列表序号]')
+    .option('followAll', '<序号> 在该订阅更新时提醒所有人 [已移至 rsso.follow --all 子命令，使用列表序号]')
     .option('target', '--target <platform:guildId> 跨群订阅（高级权限）')
     .option('arg', '-a <content> 自定义配置')
     .option('template', '-i <content> 消息模板')
     .option('title', '-t <content> 自定义命名')
-    .option('pull', '-p <content> [订阅id|关键字]拉取订阅id最后更新 [已移至 rsso.pull 子命令]')
+    .option('pull', '-p <序号> 拉取订阅最新更新 [已移至 rsso.pull 子命令，使用列表序号]')
     .option('force', '强行写入')
     .option('daily', '-d <content>')
     .option('test', '-T 测试')
@@ -675,18 +675,25 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
   rsso.edit 1 -u https://...      - 修改URL
   rsso.edit 1 -s ".item"         - 修改选择器（HTML监控）
   rsso.edit 1 --target onebot:123  - 修改推送目标（高级权限）
+  rsso.edit 1 --target "onebot:123,telegram:456"  - 多个推送目标（高级权限）⭐
   rsso.edit 1 -t "新标题" --test  - 测试修改（不保存）
 
 示例:
   rsso.edit 1 -t "我的订阅"
   rsso.edit 1 -i custom
   rsso.edit 1 --target onebot:123456
+  rsso.edit 1 --target "onebot:123,telegram:456"
+
+💡 提示:
+  - 使用列表序号（1, 2, 3...）而不是数据库ID
+  - 推送目标格式: platform:guildId
+  - 多个目标用逗号分隔或多次使用 --target
     `)
-    .option('title', '-t <title> 修改标题')
-    .option('url', '-u <url> 修改URL')
-    .option('template', '-i <template> 修改模板')
-    .option('selector', '-s <selector> 修改选择器（HTML监控）')
-    .option('target', '--target <platform:guildId> 修改推送目标（高级权限）')
+    .option('title', '-t <title> 修改标题', { type: 'string' })
+    .option('url', '-u <url> 修改URL', { type: 'string' })
+    .option('template', '-i <template> 修改模板', { type: 'string' })
+    .option('selector', '-s <selector> 修改选择器（HTML监控）', { type: 'string' })
+    .option('target', '--target <target> 修改推送目标（高级权限）')
     .option('test', '--test 测试修改（不保存）')
     .example('rsso.edit 1 -t "新标题"')
     .action(async ({ session, options }, id) => {
@@ -720,6 +727,24 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
         return `请指定要修改的内容\n可用选项: -t (标题), -u (URL), -i (模板), -s (选择器), --target (推送目标)\n使用 --help 查看详细帮助`
       }
 
+      // 解析推送目标（支持单个或多个）
+      let parsedTargets: string[] = []
+      if (options.target) {
+        // 支持逗号分隔或分号分隔的多个目标
+        parsedTargets = options.target
+          .split(/[;,，；]/)
+          .map(t => t.trim())
+          .filter(t => t.length > 0)
+
+        // 验证每个目标的格式
+        for (const t of parsedTargets) {
+          const parts = t.split(/[:：]/)
+          if (parts.length !== 2) {
+            return `❌ 推送目标格式错误: "${t}"\n正确格式: platform:guildId\n示例: onebot:123456\n\n支持多个目标，用逗号分隔:\n  --target "onebot:123,telegram:456"`
+          }
+        }
+      }
+
       // 测试模式
       if (options.test) {
         try {
@@ -731,7 +756,14 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
           if (options.url) testOutput += `→ 新URL: ${options.url}\n`
           if (options.template) testOutput += `→ 新模板: ${options.template}\n`
           if (options.selector) testOutput += `→ 新选择器: ${options.selector}\n`
-          if (options.target) testOutput += `→ 新推送目标: ${options.target}\n`
+          if (parsedTargets.length > 0) {
+            if (parsedTargets.length === 1) {
+              testOutput += `→ 新推送目标: ${parsedTargets[0]}\n`
+            } else {
+              testOutput += `→ 新推送目标:\n  ${parsedTargets.join('\n  ')}\n`
+              testOutput += `\n⚠️ 注意: 多个推送目标会创建多个订阅记录\n每个目标会复制当前的订阅配置\n`
+            }
+          }
           testOutput += `\n⚠️ 测试模式：不会保存修改\n去掉 --test 选项保存更改`
           return testOutput
         } catch (error: any) {
@@ -763,28 +795,80 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
           updates.arg = rssItem.arg
         }
 
-        if (options.target) {
-          // 解析新的推送目标
-          const target = options.target.split(/[:：]/)
-          if (target.length !== 2) {
-            return `❌ 推送目标格式错误\n正确格式: platform:guildId\n示例: onebot:123456`
+        // 处理推送目标修改
+        if (parsedTargets.length > 0) {
+          if (parsedTargets.length === 1) {
+            // 单个目标：直接修改当前订阅
+            const [newPlatform, newGuildId] = parsedTargets[0].split(/[:：]/)
+            updates.platform = newPlatform
+            updates.guildId = newGuildId
+
+            await ctx.database.set(('rssOwl' as any), rssItem.id, updates)
+
+            let result = `✅ 订阅已更新 [序号:${id} | ID:${rssItem.id}]\n\n`
+            if (options.title) result += `标题: ${rssItem.title} → ${options.title}\n`
+            if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
+            if (options.template) result += `模板: ${rssItem.arg?.template || 'default'} → ${options.template}\n`
+            if (options.selector) result += `选择器: ${rssItem.arg?.selector || '无'} → ${options.selector}\n`
+            result += `推送目标: ${rssItem.platform}:${rssItem.guildId} → ${parsedTargets[0]}\n`
+
+            return result.trim()
+          } else {
+            // 多个目标：复制订阅到其他目标
+            const originalTarget = `${rssItem.platform}:${rssItem.guildId}`
+            let result = `✅ 订阅已更新 [序号:${id} | ID:${rssItem.id}]\n\n`
+            result += `已创建 ${parsedTargets.length} 个推送目标:\n\n`
+            result += `1️⃣ 原订阅 (本群): ${originalTarget}\n`
+
+            // 修改原订阅的其他属性
+            await ctx.database.set(('rssOwl' as any), rssItem.id, updates)
+
+            // 为其他目标创建新订阅
+            for (let i = 0; i < parsedTargets.length; i++) {
+              const [newPlatform, newGuildId] = parsedTargets[i].split(/[:：]/)
+
+              // 检查是否已存在相同目标的订阅
+              const existing = await ctx.database.get(('rssOwl' as any), {
+                platform: newPlatform,
+                guildId: newGuildId,
+                url: rssItem.url
+              })
+
+              if (existing.length > 0) {
+                result += `${i + 2}. ⚠️ ${newPlatform}:${newGuildId} (订阅已存在，已跳过)\n`
+                continue
+              }
+
+              // 创建新订阅
+              const newSubscription = {
+                ...rssItem,
+                id: undefined, // 让数据库自动生成新ID
+                platform: newPlatform,
+                guildId: newGuildId
+              }
+
+              const created = await ctx.database.create(('rssOwl' as any), newSubscription)
+              result += `${i + 2}. ✅ ${newPlatform}:${newGuildId} (新订阅ID: ${created.id})\n`
+            }
+
+            if (options.title) result += `\n标题: ${rssItem.title} → ${options.title}\n`
+            if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
+            result += `\n💡 提示: 可以使用 rsso.list 查看所有订阅`
+
+            return result.trim()
           }
+        } else {
+          // 没有修改推送目标，只修改其他属性
+          await ctx.database.set(('rssOwl' as any), rssItem.id, updates)
 
-          const [newPlatform, newGuildId] = target
-          updates.platform = newPlatform
-          updates.guildId = newGuildId
+          let result = `✅ 订阅已更新 [序号:${id} | ID:${rssItem.id}]\n\n`
+          if (options.title) result += `标题: ${rssItem.title} → ${options.title}\n`
+          if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
+          if (options.template) result += `模板: ${rssItem.arg?.template || 'default'} → ${options.template}\n`
+          if (options.selector) result += `选择器: ${rssItem.arg?.selector || '无'} → ${options.selector}\n`
+
+          return result.trim()
         }
-
-        await ctx.database.set(('rssOwl' as any), rssItem.id, updates)
-
-        let result = `✅ 订阅已更新 [序号:${id} | ID:${rssItem.id}]\n\n`
-        if (options.title) result += `标题: ${rssItem.title} → ${options.title}\n`
-        if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
-        if (options.template) result += `模板: ${rssItem.arg?.template || 'default'} → ${options.template}\n`
-        if (options.selector) result += `选择器: ${rssItem.arg?.selector || '无'} → ${options.selector}\n`
-        if (options.target) result += `推送目标: ${rssItem.platform}:${rssItem.guildId} → ${options.target}\n`
-
-        return result
       } catch (error: any) {
         return `更新失败: ${error.message}`
       }
