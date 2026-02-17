@@ -45,6 +45,14 @@ describe('NotificationQueueManager', () => {
   beforeEach(() => {
     // Reset all mocks before each test
     jest.clearAllMocks()
+
+    // 设置默认的 database mock 返回值
+    mockCtx.database.get.mockResolvedValue([])
+    mockCtx.database.create.mockResolvedValue({ id: 1 })
+    mockCtx.database.set.mockResolvedValue(undefined)
+    mockCtx.database.remove.mockResolvedValue(undefined)
+    mockCtx.broadcast.mockResolvedValue(undefined)
+
     queueManager = new NotificationQueueManager(mockCtx, mockConfig)
   })
 

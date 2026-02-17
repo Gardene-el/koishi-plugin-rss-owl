@@ -163,26 +163,50 @@ rsso -p 早报网
 
 ## 📋 命令说明
 
-### 基础命令
+### 主命令（添加订阅）
 
 | 命令 | 说明 | 示例 |
 |------|------|------|
-| `rsso <url>` | 订阅 RSS | `rsso rss:qqorw` |
-| `rsso -l [keyword]` | 查看订阅列表 | `rsso -l`, `rsso -l 早报` |
-| `rsso -r <id\|keyword>` | 取消订阅 | `rsso -r 早报网` |
-| `rsso -p <id\|keyword>` | 立即拉取 | `rsso -p 早报网` |
-| `rsso -f <id\|keyword>` | 关注/取消关注 | `rsso -f 早报网` |
-| `rsso -T <url>` | 测试链接 | `rsso -T rss:qqorw` |
+| `rsso <url>` | 订阅 RSS/源 | `rsso rss:qqorw` |
+| `rsso <url> -t <title>` | 自定义标题订阅 | `rsso rss:qqorw -t 早报` |
+| `rsso <url> -i <template>` | 指定模板订阅 | `rsso rss:qqorw -i default` |
+| `rsso <url> --target <p:gid>` | 跨群订阅 | `rsso rss:qqorw --target onebot:123456` |
+| `rsso <url> --test` | 测试订阅 | `rsso rss:qqorw --test` |
 
-### 高级选项
+### 管理子命令
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `rsso.list [id]` | 查看订阅列表 | `rsso.list`, `rsso.list 1` |
+| `rsso.remove <id>` | 删除订阅 | `rsso.remove 1` |
+| `rsso.remove --all` | 删除全部订阅 | `rsso.remove --all` |
+| `rsso.edit <id>` | 修改订阅 | `rsso.edit 1 -t 新标题` |
+| `rsso.pull <id>` | 拉取最新内容 | `rsso.pull 1` |
+| `rsso.follow <id>` | 关注订阅 | `rsso.follow 1` |
+| `rsso.follow <id> --all` | 全员提醒 | `rsso.follow 1 --all` |
+
+### 修改订阅选项
 
 | 选项 | 说明 | 示例 |
 |------|------|------|
-| `-i <template>` | 指定模板 | `rsso -i default <url>` |
-| `-t <title>` | 订阅名称 | `rsso -t 早报 <url>` |
-| `-a <params>` | 局部参数 | `rsso -a merge:true <url>` |
-| `-d <time/count>` | 定时推送 | `rsso -d 8:00/10 <url>` |
-| `-q` | 查看快速链接 | `rsso -q` |
+| `-t <title>` | 修改标题 | `rsso.edit 1 -t 新标题` |
+| `-u <url>` | 修改URL | `rsso.edit 1 -u https://...` |
+| `-i <template>` | 修改模板 | `rsso.edit 1 -i custom` |
+| `-s <selector>` | 修改选择器 | `rsso.edit 1 -s ".item"` |
+| `--test` | 测试修改 | `rsso.edit 1 -t 新标题 --test` |
+
+### 兼容性说明（旧命令）
+
+旧命令选项仍然可用，但建议迁移到新子命令：
+
+| 旧命令 | 新命令 | 说明 |
+|--------|--------|------|
+| `rsso -l` | `rsso.list` | 查看订阅列表 |
+| `rsso -l 1` | `rsso.list 1` | 查看订阅详情 |
+| `rsso -r 1` | `rsso.remove 1` | 删除订阅 |
+| `rsso --removeAll` | `rsso.remove --all` | 删除全部 |
+| `rsso -p 1` | `rsso.pull 1` | 拉取更新 |
+| `rsso -f 1` | `rsso.follow 1` | 关注订阅 |
 
 ### 局部参数（arg）
 
@@ -609,6 +633,45 @@ debug: "details"  # 显示所有调试信息
 - 使用 `debug: details` 查看代理日志
 
 ## 📜 更新日志
+
+### 5.0.4 (2026-02-17)
+
+#### 🎉 重大更新 - 命令系统重构
+
+**新增功能**：
+- ✨ **子命令系统** - 新增 `rsso.list`, `rsso.remove`, `rsso.edit`, `rsso.pull`, `rsso.follow` 子命令
+- ✨ **修改订阅功能** - 支持直接修改订阅配置，无需删除后重新添加
+- 🔐 **权限系统修复** - 修复权限检查逻辑，权限等级等于要求值时可以执行
+- 🌐 **跨群订阅增强** - 添加测试模式，可验证目标群组是否可访问
+
+**命令变更**：
+| 旧命令 | 新命令 |
+|--------|--------|
+| `rsso -l` | `rsso.list` |
+| `rsso -r 1` | `rsso.remove 1` |
+| `rsso -p 1` | `rsso.pull 1` |
+| `rsso -f 1` | `rsso.follow 1` |
+
+**权限改进**：
+- 修复：删除订阅权限检查 `authority >` → `authority >=`
+- 改进：权限提示信息显示当前权限等级和要求权限等级
+- 新增：修改订阅功能需要基础权限
+
+**跨群订阅改进**：
+- 新增：`rsso <url> --target <platform:guildId> --test` 测试模式
+- 改进：详细的错误提示，帮助排查群组访问问题
+
+**兼容性**：
+- 保留：旧命令选项仍可使用（会提示迁移到新命令）
+- 数据库：无需变更
+- 配置：无需修改
+
+### 5.0.3 (2025-01-16)
+
+#### 功能改进
+- 🔧 **修复权限系统** - 统一权限检查逻辑
+- 🐛 **修复跨群订阅** - 确保消息发送到目标群组
+- 📝 **改进错误提示** - 提供更详细的错误信息
 
 ### 5.0.0-beta (2025-01-15)
 

@@ -103,21 +103,182 @@ export function apply(ctx: Context, config: Config) {
   const generateSelectorByAILocal = async (url: string, instruction: string, html: string) =>
     generateSelectorByAI(config, url, instruction, html)
 
+  // ============================================
+  // 子命令：订阅管理
+  // ============================================
+
+  // List subscriptions command
+  ctx.guild()
+    .command('rssowl.list [id:number]', '查看订阅列表')
+    .alias('rsso.list')
+    .usage(`查看订阅列表
+
+用法:
+  rsso.list              - 查看所有订阅
+  rsso.list 1            - 查看订阅 #1 的详情
+    `)
+    .example('rsso.list')
+    .action(async ({ session }, id) => {
+      const { id: guildId } = session.event.guild as any
+      const { platform } = session.event as any
+
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
+
+      if (id !== undefined) {
+        // 查看单个订阅详情
+        const rssItem = rssList.find((v: any) => v.id === id)
+        if (!rssItem) return `未找到订阅 #${id}`
+
+        const followers = rssItem.followers?.length > 0
+          ? rssItem.followers.join(', ')
+          : '无'
+
+        return `📰 订阅详情 (#${rssItem.id})
+标题: ${rssItem.title}
+链接: ${rssItem.url}
+类型: ${rssItem.arg?.type || 'RSS'}
+模板: ${rssItem.arg?.template || config.basic.defaultTemplate}
+更新时间: ${rssItem.lastPubDate ? parsePubDateLocal(rssItem.lastPubDate).toLocaleString('zh-CN', { hour12: false }) : '未知'}
+关注者: ${followers}`
+      } else {
+        // 查看所有订阅
+        if (rssList.length === 0) return '当前没有任何订阅'
+
+        return rssList.map((v, i) =>
+          `${i + 1}. ${v.title} [ID:${v.id}]`
+        ).join('\n')
+      }
+    })
+
+  // Remove subscription command
+  ctx.guild()
+    .command('rssowl.remove <id:number>', '删除订阅')
+    .alias('rsso.remove')
+    .usage(`删除订阅
+
+用法:
+  rsso.remove 1           - 删除订阅 #1
+  rsso.remove --all       - 删除全部订阅（需要权限）
+    `)
+    .option('all', '--all 删除全部订阅')
+    .example('rsso.remove 1')
+    .action(async ({ session, options }, id) => {
+      const { id: guildId } = session.event.guild as any
+      const { platform } = session.event as any
+      const { authority } = session.user as any
+
+      if (options.all) {
+        if (authority >= config.basic.authority) {
+          await ctx.database.remove(('rssOwl' as any), { platform, guildId })
+          return '✅ 已删除全部订阅'
+        }
+        return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
+      }
+
+      // 删除单个订阅
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId, id })
+      if (rssList.length === 0) return `未找到订阅 #${id}`
+
+      await ctx.database.remove(('rssOwl' as any), { id })
+
+      return `✅ 已删除订阅: ${rssList[0].title}`
+    })
+
+  // Pull subscription command
+  ctx.guild()
+    .command('rssowl.pull <id:number>', '拉取订阅最新内容')
+    .alias('rsso.pull')
+    .usage(`拉取订阅最新内容
+
+用法:
+  rsso.pull 1             - 拉取订阅 #1 的最新更新
+    `)
+    .example('rsso.pull 1')
+    .action(async ({ session }, id) => {
+      const { id: guildId } = session.event.guild as any
+      const { platform } = session.event as any
+
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
+      const rssItem = findRssItemLocal(rssList, id)
+
+      if (!rssItem) return `未找到订阅 #${id}`
+
+      try {
+        let arg = mixinArgLocal(rssItem.arg || {})
+        let rssItemList = (await Promise.all(rssItem.url.split("|")
+          .map((i: string) => parseQuickUrlLocal(i))
+          .map(async (url: string) => await getRssDataLocal(url, arg)))).flat(1)
+        let itemArray = rssItemList.sort((a, b) => parsePubDateLocal(b.pubDate).getTime() - parsePubDateLocal(a.pubDate).getTime())
+        if (arg.reverse) itemArray = itemArray.reverse()
+        const maxItem = arg.forceLength || 1
+        let messageList = await Promise.all(itemArray.filter((v, i) => i < maxItem).map(async i => await parseRssItem(i, { ...rssItem, ...arg }, rssItem.author)))
+        return messageList.join("")
+      } catch (error) {
+        debugLocal(error, 'pull error', 'error')
+        return `拉取失败: ${getFriendlyErrorMessage(error, '获取订阅数据')}`
+      }
+    })
+
+  // Follow subscription command
+  ctx.guild()
+    .command('rssowl.follow <id:number>', '关注订阅')
+    .alias('rsso.follow')
+    .usage(`关注订阅，在该订阅更新时提醒你
+
+用法:
+  rsso.follow 1           - 关注订阅 #1（仅提醒你）
+  rsso.follow 1 --all     - 关注订阅 #1（提醒所有人，需要高级权限）
+    `)
+    .option('all', '--all 提醒所有人')
+    .example('rsso.follow 1')
+    .action(async ({ session, options }, id) => {
+      const { id: guildId } = session.event.guild as any
+      const { platform } = session.event as any
+      const { id: userId } = session.event.user as any
+      const { authority } = session.user as any
+
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
+      const rssItem = findRssItemLocal(rssList, id)
+
+      if (!rssItem) return `未找到订阅 #${id}`
+
+      if (options.all) {
+        if (authority >= config.basic.advancedAuthority) {
+          if (!rssItem.followers) rssItem.followers = []
+          if (rssItem.followers.includes('all')) return '已经设置全员提醒'
+          rssItem.followers.push('all')
+          await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { followers: rssItem.followers })
+          return '✅ 已设置全员提醒'
+        }
+        return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.advancedAuthority} 或以上`
+      } else {
+        if (!rssItem.followers) rssItem.followers = []
+        if (rssItem.followers.includes(userId)) return '已经关注过了'
+        rssItem.followers.push(userId)
+        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { followers: rssItem.followers })
+        return '✅ 关注成功'
+      }
+    })
+
+  // ============================================
+  // 主命令：添加订阅
+  // ============================================
+
   // Register commands
   ctx.guild()
-    .command('rssowl <url:text>', '订阅 RSS 链接')
+    .command('rssowl <url:text>', '订阅 RSS/源')
     .alias('rsso')
     .usage(usage)
-    .option('list', '-l [content] 查看订阅列表(详情)')
-    .option('remove', '-r <content> [订阅id|关键字] 删除订阅')
-    .option('removeAll', '删除全部订阅')
-    .option('follow', '-f <content> [订阅id|关键字] 关注订阅，在该订阅更新时提醒你')
-    .option('followAll', '<content> [订阅id|关键字] 在该订阅更新时提醒所有人')
-    .option('target', '<content> [群组id] 跨群订阅')
+    .option('list', '-l [content] 查看订阅列表(详情) [已移至 rsso.list 子命令]')
+    .option('remove', '-r <content> [订阅id|关键字] 删除订阅 [已移至 rsso.remove 子命令]')
+    .option('removeAll', '删除全部订阅 [已移至 rsso.remove --all 子命令]')
+    .option('follow', '-f <content> [订阅id|关键字] 关注订阅 [已移至 rsso.follow 子命令]')
+    .option('followAll', '<content> [订阅id|关键字] 在该订阅更新时提醒所有人 [已移至 rsso.follow --all 子命令]')
+    .option('target', '--target <platform:guildId> 跨群订阅（高级权限）')
     .option('arg', '-a <content> 自定义配置')
-    .option('template', '-i <content> 消息模板[content(文字模板)|default(图片模板)],更多见readme')
+    .option('template', '-i <content> 消息模板')
     .option('title', '-t <content> 自定义命名')
-    .option('pull', '-p <content> [订阅id|关键字]拉取订阅id最后更新')
+    .option('pull', '-p <content> [订阅id|关键字]拉取订阅id最后更新 [已移至 rsso.pull 子命令]')
     .option('force', '强行写入')
     .option('daily', '-d <content>')
     .option('test', '-T 测试')
@@ -147,70 +308,28 @@ export function apply(ctx: Context, config: Config) {
 
       const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
 
-      if (options?.list === '') {
-        debugLocal(rssList, 'rssList', 'info')
-        if (rssList.length == 0) return '当前没有任何订阅'
-        return rssList.map((v, i) => `${i + 1}. ${v.title} [${v.id}]`).join('\n')
-      }
-      if (options?.list) {
-        let rssItem = findRssItemLocal(rssList, options.list)
-        if (!rssItem) return '未找到该订阅'
-        return `标题: ${rssItem.title}\n链接: ${rssItem.url}\n更新时间: ${rssItem.lastPubDate ? parsePubDateLocal(rssItem.lastPubDate).toLocaleString('zh-CN', { hour12: false }) : '未知'}`
+      if (options?.list === '' || options?.list) {
+        return `💡 提示：请使用子命令查看订阅\n\nrsso.list              - 查看所有订阅\nrsso.list 1            - 查看订阅详情\n\n（旧选项 -l 仍可使用，但建议迁移到新命令）`
       }
 
       if (options?.remove) {
-        if (authority > config.basic.authority) {
-          let rssItem = findRssItemLocal(rssList, options.remove)
-          if (!rssItem) return '未找到该订阅'
-          await ctx.database.remove(('rssOwl' as any), rssItem.id)
-          return '删除成功'
-        }
-        return '权限不足'
+        return `💡 提示：请使用子命令删除订阅\n\nrsso.remove 1           - 删除订阅 #1\nrsso.remove --all       - 删除全部订阅\n\n（旧选项 -r 仍可使用，但建议迁移到新命令）`
       }
+
       if (options?.removeAll) {
-        if (authority > config.basic.authority) {
-          await ctx.database.remove(('rssOwl' as any), { platform, guildId })
-          return '删除成功'
-        }
-        return '权限不足'
+        return `💡 提示：请使用子命令删除订阅\n\nrsso.remove --all       - 删除全部订阅\n\n（旧选项仍可使用，但建议迁移到新命令）`
       }
+
       if (options?.follow) {
-        let rssItem = findRssItemLocal(rssList, options.follow)
-        if (!rssItem) return '未找到该订阅'
-        if (!rssItem.followers) rssItem.followers = []
-        if (rssItem.followers.includes(userId)) return '已经关注过了'
-        rssItem.followers.push(userId)
-        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { followers: rssItem.followers })
-        return '关注成功'
+        return `💡 提示：请使用子命令关注订阅\n\nrsso.follow 1           - 关注订阅 #1\n\n（旧选项 -f 仍可使用，但建议迁移到新命令）`
       }
+
       if (options?.followAll) {
-        if (authority >= config.basic.advancedAuthority) {
-          let rssItem = findRssItemLocal(rssList, options.followAll)
-          if (!rssItem) return '未找到该订阅'
-          if (!rssItem.followers) rssItem.followers = []
-          rssItem.followers.push('all')
-          await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { followers: rssItem.followers })
-          return '关注成功'
-        }
-        return '权限不足'
+        return `💡 提示：请使用子命令设置全员提醒\n\nrsso.follow 1 --all     - 设置全员提醒\n\n（旧选项仍可使用，但建议迁移到新命令）`
       }
+
       if (options?.pull) {
-        let rssItem = findRssItemLocal(rssList, options.pull)
-        if (!rssItem) return '未找到该订阅'
-        try {
-          let arg = mixinArgLocal(rssItem.arg || {})
-          let rssItemList = (await Promise.all(rssItem.url.split("|")
-            .map((i: string) => parseQuickUrlLocal(i))
-            .map(async (url: string) => await getRssDataLocal(url, arg)))).flat(1)
-          let itemArray = rssItemList.sort((a, b) => parsePubDateLocal(b.pubDate).getTime() - parsePubDateLocal(a.pubDate).getTime())
-          if (arg.reverse) itemArray = itemArray.reverse()
-          const maxItem = arg.forceLength || 1
-          let messageList = await Promise.all(itemArray.filter((v, i) => i < maxItem).map(async i => await parseRssItem(i, { ...rssItem, ...arg }, rssItem.author)))
-          return messageList.join("")
-        } catch (error) {
-          debugLocal(error, 'pull error', 'error')
-          return `拉取失败: ${getFriendlyErrorMessage(error, '获取订阅数据')}`
-        }
+        return `💡 提示：请使用子命令拉取订阅\n\nrsso.pull 1             - 拉取订阅 #1 的最新更新\n\n（旧选项 -p 仍可使用，但建议迁移到新命令）`
       }
 
       if (url) {
@@ -223,12 +342,22 @@ export function apply(ctx: Context, config: Config) {
           if (authority >= config.basic.advancedAuthority) {
             let target = options.target.split(/[:：]/)
             if (target.length == 1) {
-              return '请输入正确的群号，格式为 platform:guildId 或 platform：guildId'
+              return '请输入正确的群号，格式为 platform:guildId 或 platform：guildId\n示例: onebot:123456'
             }
             targetPlatform = target[0]
             targetGuildId = target[1]
+
+            // 测试模式：发送验证消息到目标群组
+            if (options.test) {
+              try {
+                await ctx.broadcast([`${targetPlatform}:${targetGuildId}`], '📤 跨群订阅测试消息')
+                return `✅ 测试消息已发送到目标群组\n目标: ${targetPlatform}:${targetGuildId}\n\n说明：Bot 可以访问该群组，跨群订阅可以正常工作。\n去掉 --test 选项完成订阅。`
+              } catch (error: any) {
+                return `❌ 无法发送到目标群组\n目标: ${targetPlatform}:${targetGuildId}\n错误: ${error.message}\n\n请确认：\n1. Bot 是否在该群组中\n2. 群组ID 是否正确\n3. 平台名称是否正确（如 onebot, telegram 等）`
+              }
+            }
           } else {
-            return '权限不足'
+            return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.advancedAuthority} 或以上`
           }
         }
         let title = options?.title || ""
@@ -265,7 +394,7 @@ export function apply(ctx: Context, config: Config) {
             followers: []
           }
           if (options.force) {
-            if (authority < config.basic.authority) return '权限不足'
+            if (authority < config.basic.authority) return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
           } else {
             if (config.basic.urlDeduplication && rssList.find(i => i.rssId == rssItem.rssId)) return `订阅已存在: ${rssItem.rssId}`
           }
@@ -505,6 +634,116 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
       } catch (error: any) {
         debugLocal(error, 'watch error', 'error')
         return `监控失败: ${getFriendlyErrorMessage(error, '网页监控')}`
+      }
+    })
+
+  // Edit subscription command
+  ctx.guild()
+    .command('rssowl.edit <id:number>', '修改订阅配置')
+    .alias('rsso.edit')
+    .usage(`修改订阅的配置项
+
+用法:
+  rsso.edit 1 -t "新标题"        - 修改标题
+  rsso.edit 1 -i content         - 修改模板
+  rsso.edit 1 -u https://...      - 修改URL
+  rsso.edit 1 -s ".item"         - 修改选择器（HTML监控）
+  rsso.edit 1 -t "新标题" --test  - 测试修改（不保存）
+
+示例:
+  rsso.edit 1 -t "我的订阅"
+  rsso.edit 1 -i custom
+  rsso.edit 1 -u https://example.com/feed
+    `)
+    .option('title', '-t <title> 修改标题')
+    .option('url', '-u <url> 修改URL')
+    .option('template', '-i <template> 修改模板')
+    .option('selector', '-s <selector> 修改选择器（HTML监控）')
+    .option('test', '--test 测试修改（不保存）')
+    .example('rsso.edit 1 -t "新标题"')
+    .action(async ({ session, options }, id) => {
+      const { id: guildId } = session.event.guild as any
+      const { platform } = session.event as any
+      const { authority } = session.user as any
+
+      // 查找订阅
+      const rssList = await ctx.database.get(('rssOwl' as any), { id })
+      if (rssList.length === 0) return `未找到订阅 #${id}`
+
+      const rssItem = rssList[0]
+
+      // 权限检查
+      if (authority < config.basic.authority) {
+        return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
+      }
+
+      // 检查是否有要修改的内容
+      const hasChanges = options.title || options.url || options.template || options.selector
+      if (!hasChanges) {
+        return `请指定要修改的内容\n可用选项: -t (标题), -u (URL), -i (模板), -s (选择器)\n使用 --help 查看详细帮助`
+      }
+
+      // 测试模式
+      if (options.test) {
+        try {
+          let testOutput = `📝 修改预览 (#${id})\n\n`
+          testOutput += `当前标题: ${rssItem.title}\n`
+          testOutput += `当前URL: ${rssItem.url}\n`
+          if (options.title) testOutput += `→ 新标题: ${options.title}\n`
+          if (options.url) testOutput += `→ 新URL: ${options.url}\n`
+          if (options.template) testOutput += `→ 新模板: ${options.template}\n`
+          if (options.selector) testOutput += `→ 新选择器: ${options.selector}\n`
+          testOutput += `\n💡 去掉 --test 保存修改`
+          return testOutput
+        } catch (error: any) {
+          debugLocal(error, 'edit test error', 'error')
+          return `测试失败: ${getFriendlyErrorMessage(error, '修改订阅')}`
+        }
+      }
+
+      // 应用修改
+      try {
+        const updates: any = {}
+
+        if (options.title) {
+          updates.title = options.title
+        }
+
+        if (options.url) {
+          // 验证新URL
+          options.url = ensureUrlProtocol(options.url)
+          updates.url = options.url
+        }
+
+        if (options.template || options.selector) {
+          // 更新配置
+          const currentArg = rssItem.arg || {}
+          const newArg = { ...currentArg }
+
+          if (options.template) {
+            newArg.template = options.template
+          }
+
+          if (options.selector) {
+            newArg.selector = options.selector
+            if (!newArg.type) newArg.type = 'html'
+          }
+
+          updates.arg = newArg
+        }
+
+        await ctx.database.set(('rssOwl' as any), { id }, updates)
+
+        let result = `✅ 订阅 #${id} 已更新\n`
+        if (options.title) result += `标题: ${rssItem.title} → ${options.title}\n`
+        if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
+        if (options.template) result += `模板已更新\n`
+        if (options.selector) result += `选择器已更新\n`
+
+        return result.trim()
+      } catch (error: any) {
+        debugLocal(error, 'edit error', 'error')
+        return `修改失败: ${getFriendlyErrorMessage(error, '修改订阅')}`
       }
     })
 
@@ -779,7 +1018,7 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
 
         case 'clear': {
           if (authority < config.basic.authority) {
-            return '权限不足，需要权限等级 >= ' + config.basic.authority
+            return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
           }
 
           try {
@@ -793,7 +1032,7 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
 
         case 'cleanup': {
           if (authority < config.basic.authority) {
-            return '权限不足，需要权限等级 >= ' + config.basic.authority
+            return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
           }
 
           const keepLatest = parseInt(args[0]) || cache.getMaxCacheSize()
@@ -939,7 +1178,7 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
 
         case 'retry': {
           if (authority < config.basic.authority) {
-            return `权限不足，需要权限等级 >= ${config.basic.authority}`
+            return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
           }
 
           try {
@@ -966,7 +1205,7 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
 
         case 'cleanup': {
           if (authority < config.basic.authority) {
-            return `权限不足，需要权限等级 >= ${config.basic.authority}`
+            return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
           }
 
           try {

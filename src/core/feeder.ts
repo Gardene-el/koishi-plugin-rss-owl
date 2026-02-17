@@ -41,14 +41,26 @@ export function getLastContent(item: any, config: Config) {
 }
 
 export function formatArg(options: any, config: Config): rssArg {
-  let { arg, template } = options
+  let { arg, template, auth } = options
+
+  // 特殊处理：提取完整的 proxyAgent URL
+  let proxyAgentUrl: string | undefined
+  if (arg && arg.includes('proxyAgent:')) {
+    const match = arg.match(/proxyAgent:([^,]+)/)
+    if (match) {
+      proxyAgentUrl = match[1]
+      // 从 arg 中移除 proxyAgent，避免被 split(":") 破坏
+      arg = arg.replace(/proxyAgent:[^,]+/, '').replace(/^,|,$/g, '').replace(/,,/g, ',')
+    }
+  }
+
   let json = Object.assign({}, ...(arg?.split(',')?.map((i: string) => ({ [i.split(":")[0]]: i.split(":")[1] })) || []))
-  let key = ["forceLength", "reverse", "timeout", "interval", "merge", "maxRssItem", "firstLoad", "bodyWidth", "bodyPadding", "proxyAgent", "auth"]
+  let key = ["forceLength", "reverse", "timeout", "interval", "merge", "maxRssItem", "firstLoad", "bodyWidth", "bodyPadding", "filter", "block"]
   let booleanKey = ['firstLoad', "reverse", 'merge']
   let numberKey = ['forceLength', "timeout", 'interval', 'maxRssItem', 'bodyWidth', 'bodyPadding']
   let falseContent = ['false', 'null', '']
 
-  json = Object.assign({}, ...Object.keys(json).filter((i: string) => key.some((key: string) => key == i)).map((key: string) => ({ [key]: booleanKey.some((bkey: string) => bkey == key) ? falseContent.some((c: string) => c == json[key]) : numberKey.some((nkey: string) => nkey == key) ? (+json[key]) : json[key] })))
+  json = Object.assign({}, ...Object.keys(json).filter((i: string) => key.some((key: string) => key == i)).map((key: string) => ({ [key]: booleanKey.some((bkey: string) => bkey == key) ? !falseContent.some((c: string) => c == json[key]) : numberKey.some((nkey: string) => nkey == key) ? (+json[key]) : json[key] })))
 
   if (template && config.template) {
     json['template'] = template
@@ -62,26 +74,27 @@ export function formatArg(options: any, config: Config): rssArg {
   if (json.filter && typeof json.filter === 'string') json.filter = json.filter.split("/")
   if (json.block && typeof json.block === 'string') json.block = json.block.split("/")
 
-  // Proxy Argument Parsing
-  if (json.proxyAgent) {
-    if (['false', 'none', ''].includes(String(json.proxyAgent))) {
+  // Proxy Argument Parsing (使用提取的完整 URL)
+  if (proxyAgentUrl) {
+    if (['false', 'none', ''].includes(String(proxyAgentUrl))) {
       json.proxyAgent = { enabled: false }
-    } else if (typeof json.proxyAgent === 'string') {
+    } else if (typeof proxyAgentUrl === 'string') {
       // Parse string proxy: socks5://127.0.0.1:7890
-      let protocolMatch = json.proxyAgent.match(/^(http|https|socks5)/)
+      let protocolMatch = proxyAgentUrl.match(/^(http|https|socks5)/)
       let protocol = protocolMatch ? protocolMatch[1] : 'http'
-      let hostMatch = json.proxyAgent.match(/:\/\/([^:\/]+)/)
+      let hostMatch = proxyAgentUrl.match(/:\/\/([^:\/]+)/)
       let host = hostMatch ? hostMatch[1] : ''
-      let portMatch = json.proxyAgent.match(/:(\d+)/)
+      let portMatch = proxyAgentUrl.match(/:(\d+)/)
       let port = portMatch ? parseInt(portMatch[1]) : 7890
 
-      let proxyAgent: any = { enabled: true, protocol, host, port }
+      let proxyAgentObj: any = { enabled: true, protocol, host, port }
 
-      if (json.auth) {
-        let [username, password] = json.auth.split("/")
-        proxyAgent.auth = { username, password }
+      // Use auth from options if provided
+      if (auth) {
+        let [username, password] = auth.split("/")
+        proxyAgentObj.auth = { username, password }
       }
-      json.proxyAgent = proxyAgent
+      json.proxyAgent = proxyAgentObj
     }
   }
 
