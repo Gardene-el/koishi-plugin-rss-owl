@@ -22,4 +22,4 @@ tsconfig.tsbuildinfo
 src/index_old.ts
 src/index.ts.bak
 *.md
-jest.config.js
+jest.config.js.env.npm

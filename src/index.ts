@@ -115,7 +115,7 @@ export function apply(ctx: Context, config: Config) {
 
 用法:
   rsso.list              - 查看所有订阅
-  rsso.list 1            - 查看订阅 #1 的详情
+  rsso.list 1            - 查看订阅 #1 的详情（使用列表序号）
     `)
     .example('rsso.list')
     .action(async ({ session }, id) => {
@@ -125,28 +125,41 @@ export function apply(ctx: Context, config: Config) {
       const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
 
       if (id !== undefined) {
-        // 查看单个订阅详情
-        const rssItem = rssList.find((v: any) => v.id === id)
-        if (!rssItem) return `未找到订阅 #${id}`
+        // 查看单个订阅详情（使用列表序号）
+        const listIndex = id - 1
+        if (listIndex < 0 || listIndex >= rssList.length) {
+          return `❌ 序号 ${id} 不存在\n当前共有 ${rssList.length} 个订阅\n\n使用 rsso.list 查看完整列表`
+        }
 
+        const rssItem = rssList[listIndex]
         const followers = rssItem.followers?.length > 0
           ? rssItem.followers.join(', ')
           : '无'
 
-        return `📰 订阅详情 (#${rssItem.id})
+        // 显示推送目标
+        const pushTarget = `${rssItem.platform}:${rssItem.guildId}`
+        const isCrossGroup = (rssItem.platform !== platform || rssItem.guildId !== guildId)
+        const targetInfo = isCrossGroup
+          ? `📤 推送目标: ${pushTarget} (跨群订阅)`
+          : `📤 推送目标: ${pushTarget} (本群)`
+
+        return `📰 订阅详情 [序号:${id} | ID:${rssItem.id}]
 标题: ${rssItem.title}
 链接: ${rssItem.url}
 类型: ${rssItem.arg?.type || 'RSS'}
 模板: ${rssItem.arg?.template || config.basic.defaultTemplate}
+${targetInfo}
 更新时间: ${rssItem.lastPubDate ? parsePubDateLocal(rssItem.lastPubDate).toLocaleString('zh-CN', { hour12: false }) : '未知'}
 关注者: ${followers}`
       } else {
         // 查看所有订阅
         if (rssList.length === 0) return '当前没有任何订阅'
 
-        return rssList.map((v, i) =>
-          `${i + 1}. ${v.title} [ID:${v.id}]`
-        ).join('\n')
+        return rssList.map((v, i) => {
+          const isCrossGroup = (v.platform !== platform || v.guildId !== guildId)
+          const targetTag = isCrossGroup ? ' [跨群]' : ''
+          return `${i + 1}. ${v.title}${targetTag} [ID:${v.id}]`
+        }).join('\n')
       }
     })
 
@@ -157,7 +170,7 @@ export function apply(ctx: Context, config: Config) {
     .usage(`删除订阅
 
 用法:
-  rsso.remove 1           - 删除订阅 #1
+  rsso.remove 1           - 删除订阅 #1（使用列表序号）
   rsso.remove --all       - 删除全部订阅（需要权限）
     `)
     .option('all', '--all 删除全部订阅')
@@ -175,13 +188,18 @@ export function apply(ctx: Context, config: Config) {
         return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
       }
 
-      // 删除单个订阅
-      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId, id })
-      if (rssList.length === 0) return `未找到订阅 #${id}`
+      // 删除单个订阅（使用列表序号）
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
+      const listIndex = id - 1
 
-      await ctx.database.remove(('rssOwl' as any), { id })
+      if (listIndex < 0 || listIndex >= rssList.length) {
+        return `❌ 序号 ${id} 不存在\n当前共有 ${rssList.length} 个订阅\n\n使用 rsso.list 查看完整列表`
+      }
 
-      return `✅ 已删除订阅: ${rssList[0].title}`
+      const rssItem = rssList[listIndex]
+      await ctx.database.remove(('rssOwl' as any), { id: rssItem.id })
+
+      return `✅ 已删除订阅: ${rssItem.title}`
     })
 
   // Pull subscription command
@@ -191,7 +209,7 @@ export function apply(ctx: Context, config: Config) {
     .usage(`拉取订阅最新内容
 
 用法:
-  rsso.pull 1             - 拉取订阅 #1 的最新更新
+  rsso.pull 1             - 拉取订阅 #1 的最新更新（使用列表序号）
     `)
     .example('rsso.pull 1')
     .action(async ({ session }, id) => {
@@ -199,9 +217,13 @@ export function apply(ctx: Context, config: Config) {
       const { platform } = session.event as any
 
       const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
-      const rssItem = findRssItemLocal(rssList, id)
+      const listIndex = id - 1
 
-      if (!rssItem) return `未找到订阅 #${id}`
+      if (listIndex < 0 || listIndex >= rssList.length) {
+        return `❌ 序号 ${id} 不存在\n当前共有 ${rssList.length} 个订阅\n\n使用 rsso.list 查看完整列表`
+      }
+
+      const rssItem = rssList[listIndex]
 
       try {
         let arg = mixinArgLocal(rssItem.arg || {})
@@ -238,9 +260,13 @@ export function apply(ctx: Context, config: Config) {
       const { authority } = session.user as any
 
       const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
-      const rssItem = findRssItemLocal(rssList, id)
+      const listIndex = id - 1
 
-      if (!rssItem) return `未找到订阅 #${id}`
+      if (listIndex < 0 || listIndex >= rssList.length) {
+        return `❌ 序号 ${id} 不存在\n当前共有 ${rssList.length} 个订阅\n\n使用 rsso.list 查看完整列表`
+      }
+
+      const rssItem = rssList[listIndex]
 
       if (options.all) {
         if (authority >= config.basic.advancedAuthority) {
@@ -309,11 +335,11 @@ export function apply(ctx: Context, config: Config) {
       const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
 
       if (options?.list === '' || options?.list) {
-        return `💡 提示：请使用子命令查看订阅\n\nrsso.list              - 查看所有订阅\nrsso.list 1            - 查看订阅详情\n\n（旧选项 -l 仍可使用，但建议迁移到新命令）`
+        return `💡 提示：请使用子命令查看订阅\n\nrsso.list              - 查看所有订阅（显示序号）\nrsso.list 1            - 查看订阅详情\n\n（旧选项 -l 仍可使用，但建议迁移到新命令）`
       }
 
       if (options?.remove) {
-        return `💡 提示：请使用子命令删除订阅\n\nrsso.remove 1           - 删除订阅 #1\nrsso.remove --all       - 删除全部订阅\n\n（旧选项 -r 仍可使用，但建议迁移到新命令）`
+        return `💡 提示：请使用子命令删除订阅\n\nrsso.remove 1           - 删除订阅 #1（使用列表序号）\nrsso.remove --all       - 删除全部订阅\n\n（旧选项 -r 仍可使用，但建议迁移到新命令）`
       }
 
       if (options?.removeAll) {
@@ -321,15 +347,15 @@ export function apply(ctx: Context, config: Config) {
       }
 
       if (options?.follow) {
-        return `💡 提示：请使用子命令关注订阅\n\nrsso.follow 1           - 关注订阅 #1\n\n（旧选项 -f 仍可使用，但建议迁移到新命令）`
+        return `💡 提示：请使用子命令关注订阅\n\nrsso.follow 1           - 关注订阅 #1（使用列表序号）\n\n（旧选项 -f 仍可使用，但建议迁移到新命令）`
       }
 
       if (options?.followAll) {
-        return `💡 提示：请使用子命令设置全员提醒\n\nrsso.follow 1 --all     - 设置全员提醒\n\n（旧选项仍可使用，但建议迁移到新命令）`
+        return `💡 提示：请使用子命令设置全员提醒\n\nrsso.follow 1 --all     - 设置全员提醒（使用列表序号）\n\n（旧选项仍可使用，但建议迁移到新命令）`
       }
 
       if (options?.pull) {
-        return `💡 提示：请使用子命令拉取订阅\n\nrsso.pull 1             - 拉取订阅 #1 的最新更新\n\n（旧选项 -p 仍可使用，但建议迁移到新命令）`
+        return `💡 提示：请使用子命令拉取订阅\n\nrsso.pull 1             - 拉取订阅 #1 的最新更新（使用列表序号）\n\n（旧选项 -p 仍可使用，但建议迁移到新命令）`
       }
 
       if (url) {
@@ -648,17 +674,19 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
   rsso.edit 1 -i content         - 修改模板
   rsso.edit 1 -u https://...      - 修改URL
   rsso.edit 1 -s ".item"         - 修改选择器（HTML监控）
+  rsso.edit 1 --target onebot:123  - 修改推送目标（高级权限）
   rsso.edit 1 -t "新标题" --test  - 测试修改（不保存）
 
 示例:
   rsso.edit 1 -t "我的订阅"
   rsso.edit 1 -i custom
-  rsso.edit 1 -u https://example.com/feed
+  rsso.edit 1 --target onebot:123456
     `)
     .option('title', '-t <title> 修改标题')
     .option('url', '-u <url> 修改URL')
     .option('template', '-i <template> 修改模板')
     .option('selector', '-s <selector> 修改选择器（HTML监控）')
+    .option('target', '--target <platform:guildId> 修改推送目标（高级权限）')
     .option('test', '--test 测试修改（不保存）')
     .example('rsso.edit 1 -t "新标题"')
     .action(async ({ session, options }, id) => {
@@ -666,42 +694,52 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
       const { platform } = session.event as any
       const { authority } = session.user as any
 
-      // 查找订阅
-      const rssList = await ctx.database.get(('rssOwl' as any), { id })
-      if (rssList.length === 0) return `未找到订阅 #${id}`
+      // 使用列表序号查找订阅
+      const rssList = await ctx.database.get(('rssOwl' as any), { platform, guildId })
+      const listIndex = id - 1
 
-      const rssItem = rssList[0]
+      if (listIndex < 0 || listIndex >= rssList.length) {
+        return `❌ 序号 ${id} 不存在\n当前共有 ${rssList.length} 个订阅\n\n使用 rsso.list 查看完整列表`
+      }
 
-      // 权限检查
+      const rssItem = rssList[listIndex]
+
+      // 权限检查（基础权限）
       if (authority < config.basic.authority) {
         return `权限不足！当前权限: ${authority}，需要权限: ${config.basic.authority} 或以上`
       }
 
+      // 修改推送目标需要高级权限
+      if (options.target && authority < config.basic.advancedAuthority) {
+        return `❌ 修改推送目标需要高级权限\n当前权限: ${authority}，需要权限: ${config.basic.advancedAuthority} 或以上`
+      }
+
       // 检查是否有要修改的内容
-      const hasChanges = options.title || options.url || options.template || options.selector
+      const hasChanges = options.title || options.url || options.template || options.selector || options.target
       if (!hasChanges) {
-        return `请指定要修改的内容\n可用选项: -t (标题), -u (URL), -i (模板), -s (选择器)\n使用 --help 查看详细帮助`
+        return `请指定要修改的内容\n可用选项: -t (标题), -u (URL), -i (模板), -s (选择器), --target (推送目标)\n使用 --help 查看详细帮助`
       }
 
       // 测试模式
       if (options.test) {
         try {
-          let testOutput = `📝 修改预览 (#${id})\n\n`
+          let testOutput = `📝 修改预览 [序号:${id} | ID:${rssItem.id}]\n\n`
           testOutput += `当前标题: ${rssItem.title}\n`
           testOutput += `当前URL: ${rssItem.url}\n`
+          testOutput += `当前推送目标: ${rssItem.platform}:${rssItem.guildId}\n`
           if (options.title) testOutput += `→ 新标题: ${options.title}\n`
           if (options.url) testOutput += `→ 新URL: ${options.url}\n`
           if (options.template) testOutput += `→ 新模板: ${options.template}\n`
           if (options.selector) testOutput += `→ 新选择器: ${options.selector}\n`
-          testOutput += `\n💡 去掉 --test 保存修改`
+          if (options.target) testOutput += `→ 新推送目标: ${options.target}\n`
+          testOutput += `\n⚠️ 测试模式：不会保存修改\n去掉 --test 选项保存更改`
           return testOutput
         } catch (error: any) {
-          debugLocal(error, 'edit test error', 'error')
-          return `测试失败: ${getFriendlyErrorMessage(error, '修改订阅')}`
+          return `测试失败: ${error.message}`
         }
       }
 
-      // 应用修改
+      // 保存修改
       try {
         const updates: any = {}
 
@@ -710,40 +748,45 @@ HTML 网页监控功能，使用 CSS 选择器提取内容
         }
 
         if (options.url) {
-          // 验证新URL
-          options.url = ensureUrlProtocol(options.url)
           updates.url = options.url
         }
 
-        if (options.template || options.selector) {
-          // 更新配置
-          const currentArg = rssItem.arg || {}
-          const newArg = { ...currentArg }
-
-          if (options.template) {
-            newArg.template = options.template
-          }
-
-          if (options.selector) {
-            newArg.selector = options.selector
-            if (!newArg.type) newArg.type = 'html'
-          }
-
-          updates.arg = newArg
+        if (options.template) {
+          if (!rssItem.arg) rssItem.arg = {}
+          rssItem.arg.template = options.template
+          updates.arg = rssItem.arg
         }
 
-        await ctx.database.set(('rssOwl' as any), { id }, updates)
+        if (options.selector) {
+          if (!rssItem.arg) rssItem.arg = {}
+          rssItem.arg.selector = options.selector
+          updates.arg = rssItem.arg
+        }
 
-        let result = `✅ 订阅 #${id} 已更新\n`
+        if (options.target) {
+          // 解析新的推送目标
+          const target = options.target.split(/[:：]/)
+          if (target.length !== 2) {
+            return `❌ 推送目标格式错误\n正确格式: platform:guildId\n示例: onebot:123456`
+          }
+
+          const [newPlatform, newGuildId] = target
+          updates.platform = newPlatform
+          updates.guildId = newGuildId
+        }
+
+        await ctx.database.set(('rssOwl' as any), rssItem.id, updates)
+
+        let result = `✅ 订阅已更新 [序号:${id} | ID:${rssItem.id}]\n\n`
         if (options.title) result += `标题: ${rssItem.title} → ${options.title}\n`
         if (options.url) result += `URL: ${rssItem.url} → ${options.url}\n`
-        if (options.template) result += `模板已更新\n`
-        if (options.selector) result += `选择器已更新\n`
+        if (options.template) result += `模板: ${rssItem.arg?.template || 'default'} → ${options.template}\n`
+        if (options.selector) result += `选择器: ${rssItem.arg?.selector || '无'} → ${options.selector}\n`
+        if (options.target) result += `推送目标: ${rssItem.platform}:${rssItem.guildId} → ${options.target}\n`
 
-        return result.trim()
+        return result
       } catch (error: any) {
-        debugLocal(error, 'edit error', 'error')
-        return `修改失败: ${getFriendlyErrorMessage(error, '修改订阅')}`
+        return `更新失败: ${error.message}`
       }
     })
 
