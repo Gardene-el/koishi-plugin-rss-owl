@@ -1,2 +1,51 @@
+# 源代码（只发布编译后的 lib 目录）
+src/
+tests/
+
+# 测试相关
+*.test.ts
+*.test.js
+**/test-*.ts
+**/test-*.js
+coverage/
+
+# 文档和配置文件
+docs/
+*.md
+!README.md
+.claude/
+
+# 开发配置
+.eslintrc
+.prettierrc
+jest.config.js
+tsconfig.json
+.editorconfig
+
+# 环境变量
+.env
+.env.*
+.env.npm
+
+# 构建缓存
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统
 .DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 其他
 tsconfig.tsbuildinfo
+*.log

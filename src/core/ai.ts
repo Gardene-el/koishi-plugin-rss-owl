@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio'
 import * as crypto from 'crypto'
 import { Config } from '../types'
 import { debug } from '../utils/logger'
+import { webSearch, formatSearchResults, buildPromptWithSearchContext } from './search'
 
 /**
  * AI 摘要缓存接口
@@ -267,9 +268,33 @@ export async function getAiSummary(
   }
 
   // 构建 Prompt
-  const prompt = config.ai.prompt!
+  let prompt = config.ai.prompt!
     .replace('{{title}}', title || '')
     .replace('{{content}}', plainText)
+
+  // 如果启用了联网搜索，进行搜索并增强 Prompt
+  if (config.search?.enabled) {
+    try {
+      // 生成搜索查询（使用标题作为查询）
+      const searchQuery = title || plainText.substring(0, 100)
+
+      debug(config, `正在联网搜索: ${searchQuery}`, 'AI-Search', 'info')
+
+      // 执行搜索
+      const searchResults = await webSearch(config, searchQuery, config.search)
+
+      // 如果搜索成功，将搜索结果添加到 Prompt 中
+      if (searchResults.success && searchResults.results.length > 0) {
+        debug(config, `联网搜索成功，找到 ${searchResults.results.length} 条结果`, 'AI-Search', 'details')
+        prompt = buildPromptWithSearchContext(prompt, searchResults, searchQuery)
+      } else if (searchResults.error) {
+        debug(config, `联网搜索失败: ${searchResults.error}`, 'AI-Search', 'info')
+      }
+    } catch (error: any) {
+      debug(config, `联网搜索异常: ${error.message}`, 'AI-Search', 'error')
+      // 搜索失败时不影响摘要生成，继续使用原始 Prompt
+    }
+  }
 
   // 调用 AI API
   const result = await callAiApi(config, prompt, `单条摘要: ${title}`)
@@ -314,7 +339,7 @@ export async function getBatchAiSummary(
     }
 
     // 构建批量 Prompt
-    const prompt = `请简要总结以下 ${cleanedItems.length} 条新闻/文章的核心内容，要求：
+    let prompt = `请简要总结以下 ${cleanedItems.length} 条新闻/文章的核心内容，要求：
 1. 语言简洁流畅，每条总结不超过30字
 2. 按顺序总结，使用数字编号
 3. 突出重点信息
@@ -325,6 +350,30 @@ ${index + 1}. 标题：${item.title}
 `).join('\n')}
 
 总结：`
+
+    // 如果启用了联网搜索，对第一个或最重要的标题进行搜索
+    if (config.search?.enabled && cleanedItems.length > 0) {
+      try {
+        // 使用第一条内容的标题作为搜索查询
+        const searchQuery = cleanedItems[0].title
+
+        debug(config, `批量摘要 - 正在联网搜索: ${searchQuery}`, 'AI-Search', 'info')
+
+        // 执行搜索
+        const searchResults = await webSearch(config, searchQuery, config.search)
+
+        // 如果搜索成功，将搜索结果添加到 Prompt 中
+        if (searchResults.success && searchResults.results.length > 0) {
+          debug(config, `批量摘要 - 联网搜索成功，找到 ${searchResults.results.length} 条结果`, 'AI-Search', 'details')
+          prompt = buildPromptWithSearchContext(prompt, searchResults, searchQuery)
+        } else if (searchResults.error) {
+          debug(config, `批量摘要 - 联网搜索失败: ${searchResults.error}`, 'AI-Search', 'info')
+        }
+      } catch (error: any) {
+        debug(config, `批量摘要 - 联网搜索异常: ${error.message}`, 'AI-Search', 'error')
+        // 搜索失败时不影响摘要生成，继续使用原始 Prompt
+      }
+    }
 
     // 调用 AI API
     const result = await callAiApi(config, prompt, `批量摘要: ${cleanedItems.length}条`)

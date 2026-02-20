@@ -43,6 +43,7 @@ export interface Config {
   net?: NetConfig
   msg?: MsgConfig
   ai?: AiConfig
+  search?: SearchConfig
   cache?: CacheConfig
   debug?: "disable"|"error"|"info"|"details"
   logging?: LoggingConfig
@@ -178,4 +179,44 @@ export interface LoggingConfig {
   includeModule?: boolean  // 包含模块名
   includeContext?: boolean  // 包含额外上下文信息
   contextFields?: string[]  // 要包含的上下文字段
+}
+
+/**
+ * 联网搜索配置
+ */
+export interface SearchConfig {
+  enabled?: boolean  // 是否启用联网搜索
+  engine?: 'tavily' | 'searxng' | 'volcengine' | 'auto'  // 搜索引擎选择，auto 表示自动选择
+  maxResults?: number  // 最大结果数
+  enginePriority?: Array<'tavily' | 'searxng' | 'volcengine'>  // 引擎优先级（当 engine 为 auto 时使用）
+  tavily?: TavilyConfig  // Tavily 配置
+  searxng?: SearxngConfig  // SearXNG 配置
+  volcengine?: VolcengineConfig  // 火山引擎配置
+}
+
+/**
+ * Tavily 搜索配置
+ */
+export interface TavilyConfig {
+  apiKey?: string  // Tavily API Key
+  searchDepth?: 'basic' | 'advanced'  // 搜索深度
+  includeAnswer?: boolean  // 是否包含 AI 生成的答案
+}
+
+/**
+ * SearXNG 搜索配置
+ */
+export interface SearxngConfig {
+  instanceUrl?: string  // SearXNG 实例 URL
+  language?: string  // 搜索语言
+  categories?: Array<'general' | 'news' | 'images' | 'videos'>  // 搜索类别
+}
+
+/**
+ * 火山引擎搜索配置
+ */
+export interface VolcengineConfig {
+  apiKey?: string  // 火山引擎 API Key（使用 AI 配置中的 baseUrl 和 model）
+  models?: string[]  // 模型列表，支持轮询（默认使用 AI 配置中的 model）
+  useAiModel?: boolean  // 是否使用 AI 配置中的 model（默认 true）
 }
