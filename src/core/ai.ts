@@ -5,6 +5,7 @@ import * as crypto from 'crypto'
 import { Config } from '../types'
 import { debug } from '../utils/logger'
 import { webSearch, formatSearchResults, buildPromptWithSearchContext } from './search'
+import { normalizeSearchConfig } from '../config'
 
 /**
  * AI 摘要缓存接口
@@ -275,13 +276,16 @@ export async function getAiSummary(
   // 如果启用了联网搜索，进行搜索并增强 Prompt
   if (config.search?.enabled) {
     try {
+      // 将扁平化的配置转换为嵌套的 SearchConfig
+      const normalizedSearchConfig = normalizeSearchConfig(config.search)
+
       // 生成搜索查询（使用标题作为查询）
       const searchQuery = title || plainText.substring(0, 100)
 
       debug(config, `正在联网搜索: ${searchQuery}`, 'AI-Search', 'info')
 
       // 执行搜索
-      const searchResults = await webSearch(config, searchQuery, config.search)
+      const searchResults = await webSearch(config, searchQuery, normalizedSearchConfig)
 
       // 如果搜索成功，将搜索结果添加到 Prompt 中
       if (searchResults.success && searchResults.results.length > 0) {
@@ -354,13 +358,16 @@ ${index + 1}. 标题：${item.title}
     // 如果启用了联网搜索，对第一个或最重要的标题进行搜索
     if (config.search?.enabled && cleanedItems.length > 0) {
       try {
+        // 将扁平化的配置转换为嵌套的 SearchConfig
+        const normalizedSearchConfig = normalizeSearchConfig(config.search)
+
         // 使用第一条内容的标题作为搜索查询
         const searchQuery = cleanedItems[0].title
 
         debug(config, `批量摘要 - 正在联网搜索: ${searchQuery}`, 'AI-Search', 'info')
 
         // 执行搜索
-        const searchResults = await webSearch(config, searchQuery, config.search)
+        const searchResults = await webSearch(config, searchQuery, normalizedSearchConfig)
 
         // 如果搜索成功，将搜索结果添加到 Prompt 中
         if (searchResults.success && searchResults.results.length > 0) {

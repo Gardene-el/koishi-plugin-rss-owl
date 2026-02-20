@@ -4,6 +4,48 @@ import { Config as ConfigType, BasicConfig, TemplateConfig, NetConfig, MsgConfig
 
 export const templateList = ['auto','content', 'only text', 'only media','only image', 'only video', 'proto', 'default', 'only description', 'custom','link'] as const
 
+/**
+ * 将扁平化的搜索配置转换为嵌套的 SearchConfig
+ * 这个函数在运行时调用，将 WebUI 的扁平配置转换为代码使用的嵌套配置
+ */
+export function normalizeSearchConfig(flatConfig: any): SearchConfig {
+  const searchConfig: SearchConfig = {
+    enabled: flatConfig.enabled || false,
+    engine: flatConfig.engine || 'tavily',
+    maxResults: flatConfig.maxResults || 5,
+    enginePriority: flatConfig.enginePriority || ['tavily', 'volcengine', 'searxng']
+  }
+
+  // Tavily 配置
+  if (flatConfig.tavilyApiKey) {
+    searchConfig.tavily = {
+      apiKey: flatConfig.tavilyApiKey,
+      searchDepth: flatConfig.tavilySearchDepth || 'basic',
+      includeAnswer: flatConfig.tavilyIncludeAnswer !== false
+    }
+  }
+
+  // SearXNG 配置
+  if (flatConfig.searxngInstanceUrl) {
+    searchConfig.searxng = {
+      instanceUrl: flatConfig.searxngInstanceUrl,
+      language: flatConfig.searxngLanguage || 'all',
+      categories: ['general'] // 固定为 general
+    }
+  }
+
+  // 火山引擎配置
+  if (flatConfig.volcengineApiKey) {
+    searchConfig.volcengine = {
+      apiKey: flatConfig.volcengineApiKey,
+      models: flatConfig.volcengineModels ? flatConfig.volcengineModels.split(',').map((m: string) => m.trim()) : [],
+      useAiModel: flatConfig.volcengineUseAiModel !== false
+    }
+  }
+
+  return searchConfig
+}
+
 // 将 ConfigSchema 重命名为 Config，并指定泛型为 ConfigType
 export const Config: Schema<ConfigType> = Schema.object({
   basic: Schema.object({
@@ -95,59 +137,20 @@ export const Config: Schema<ConfigType> = Schema.object({
     maxInputLength: Schema.number().description('发送给 AI 的最大字数限制').default(2000),
     timeout: Schema.number().description('AI 请求超时时间(毫秒)').default(30000),
   }).description('AI 摘要设置'),
-  search: Schema.intersect([
-    Schema.object({
-      enabled: Schema.boolean().description('启用联网搜索增强 AI 摘要').default(false),
-      engine: Schema.union(['tavily', 'searxng', 'volcengine', 'auto'] as const).description('搜索引擎选择（auto=自动按优先级选择）').default('tavily'),
-      maxResults: Schema.number().description('最大搜索结果数').default(5).min(1).max(10),
-      enginePriority: Schema.array(Schema.union(['tavily', 'searxng', 'volcengine'] as const)).description('引擎优先级（当 engine 为 auto 时使用）').default(['tavily', 'volcengine', 'searxng']),
-    }),
-    Schema.union([
-      Schema.object({
-        engine: Schema.const('tavily').required(),
-        tavily: Schema.intersect([
-          Schema.object({ enabled: Schema.const(true).required() }),
-          Schema.union([
-            Schema.object({
-              apiKey: Schema.string().role('secret').description('Tavily API Key（获取地址: https://tavily.com）').required(),
-              searchDepth: Schema.union(['basic', 'advanced'] as const).description('搜索深度').default('basic'),
-              includeAnswer: Schema.boolean().description('是否包含 AI 生成的搜索答案').default(true),
-            }),
-            Schema.object({}),
-          ]),
-        ]),
-      }),
-      Schema.object({
-        engine: Schema.const('searxng').required(),
-        searxng: Schema.intersect([
-          Schema.object({ enabled: Schema.const(true).required() }),
-          Schema.union([
-            Schema.object({
-              instanceUrl: Schema.string().role('link').description('SearXNG 实例 URL（自建或公共实例）').required(),
-              language: Schema.string().description('搜索语言（例如: all, zh, en）').default('all'),
-              categories: Schema.array(Schema.union(['general', 'news', 'images', 'videos'] as const)).description('搜索类别').default(['general']),
-            }),
-            Schema.object({}),
-          ]),
-        ]),
-      }),
-      Schema.object({
-        engine: Schema.const('volcengine').required(),
-        volcengine: Schema.intersect([
-          Schema.object({ enabled: Schema.const(true).required() }),
-          Schema.union([
-            Schema.object({
-              apiKey: Schema.string().role('secret').description('火山引擎 API Key（与 AI 配置中的 API Key 相同，或单独配置）').required(),
-              models: Schema.array(Schema.string()).description('模型列表（支持轮询，留空则使用默认模型）').default([]),
-              useAiModel: Schema.boolean().description('是否使用 AI 配置中的 model（优先级高于 models）').default(true),
-            }),
-            Schema.object({}),
-          ]),
-        ]),
-      }),
-      Schema.object({}),
-    ]),
-  ]).description('联网搜索设置（AI 摘要增强）'),
+  search: Schema.object({
+    enabled: Schema.boolean().description('启用联网搜索增强 AI 摘要').default(false),
+    engine: Schema.union(['tavily', 'searxng', 'volcengine', 'auto'] as const).description('搜索引擎选择').default('tavily'),
+    maxResults: Schema.number().description('最大搜索结果数').default(5).min(1).max(10),
+    enginePriority: Schema.array(Schema.union(['tavily', 'searxng', 'volcengine'] as const)).description('引擎优先级（当 engine 为 auto 时使用）').default(['tavily', 'volcengine', 'searxng']),
+    tavilyApiKey: Schema.string().role('secret').description('Tavily API Key（获取地址: https://tavily.com）').default(''),
+    tavilySearchDepth: Schema.union(['basic', 'advanced'] as const).description('Tavily 搜索深度').default('basic'),
+    tavilyIncludeAnswer: Schema.boolean().description('Tavily 是否包含 AI 生成的答案').default(true),
+    searxngInstanceUrl: Schema.string().role('link').description('SearXNG 实例 URL（自建或公共实例）').default(''),
+    searxngLanguage: Schema.string().description('SearXNG 搜索语言').default('all'),
+    volcengineApiKey: Schema.string().role('secret').description('火山引擎 API Key（与 AI 配置中的 API Key 相同，或单独配置）').default(''),
+    volcengineModels: Schema.string().description('火山引擎模型列表（用逗号分隔，例如: doubao-seed-1-6-lite-251015,doubao-seed-1-6-flash-250828）').default(''),
+    volcengineUseAiModel: Schema.boolean().description('火山引擎是否使用 AI 配置中的 model').default(true),
+  }).description('联网搜索设置（AI 摘要增强）'),
   cache: Schema.object({
     enabled: Schema.boolean().description('启用消息缓存').default(true),
     maxSize: Schema.number().description('最大缓存消息条数').default(100),
