@@ -133,7 +133,21 @@ export const Config: Schema<ConfigType> = Schema.object({
     model: Schema.string().description('使用的模型名称').default('gpt-3.5-turbo'),
     placement: Schema.union(['top', 'bottom']).description('摘要位置（仅在模板未显式包含 {{aiSummary}} 时生效）').default('top'),
     separator: Schema.string().description('摘要与正文的分割线').default('----------------'),
-    prompt: Schema.string().role('textarea').description('提示词 ({{title}} 代表标题, {{content}} 代表内容)').default('请简要总结以下新闻/文章的核心内容，要求语言简洁流畅：\n标题：{{title}}\n内容：{{content}}'),
+    prompt: Schema.string().role('textarea').description('提示词 ({{title}} 代表标题, {{content}} 代表内容)').default(`你是一位资深、严谨的新闻编辑。你的任务是基于【RSS原始内容】生成一份核心内容摘要。
+
+【⚠️ 处理逻辑与纪律】
+1. 锚定核心：摘要的核心事实（主角是谁、发生了什么事、当前时间点）**必须且只能以【RSS原始内容】为绝对基准**。
+2. 智能补全：只有当【RSS原始内容】极短、残缺（如只有一句话导语）时，才从下方的"联网搜索结果"中提取相关细节进行拼图式补全。
+3. 隔离噪音：联网搜索结果中常常包含历史事件、相似新闻或其他无关背景。绝不可将搜索结果中的"旧时间"、"次要人物"当作当前新闻的主体。
+4. 冲突处理：如果搜索结果与原始内容发生矛盾（例如时间点不同），以【RSS原始内容】为最高真理。
+5. 输出要求：直接输出摘要正文，语言要求简洁、流畅、直击要害，不要包含任何多余的废话。
+
+【新闻标题】：{{title}}
+
+【RSS原始内容】：
+{{content}}
+
+（请注意：系统稍后会在下方自动追加联网搜索内容，请你务必牢记上述【处理逻辑与纪律】，不受干扰地完成摘要撰写。）`),
     maxInputLength: Schema.number().description('发送给 AI 的最大字数限制').default(2000),
     timeout: Schema.number().description('AI 请求超时时间(毫秒)').default(30000),
   }).description('AI 摘要设置'),
