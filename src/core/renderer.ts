@@ -118,12 +118,13 @@ export async function renderHtml2Image(
     const bodyPadding = config.template.bodyPadding || 20
     const viewportWidth = bodyWidth + bodyPadding * 2 + 100  // 预留额外空间
 
+    // 先用较大的初始 viewport 加载页面（高度设大一些确保内容能完整渲染）
     await page.setViewport({
       width: viewportWidth,
-      height: 1200,
+      height: 10000,
       deviceScaleFactor: config.template.deviceScaleFactor
     })
-    debug(config, `设置截图清晰度: ${config.template.deviceScaleFactor}x, viewport: ${viewportWidth}x1200`, 'deviceScaleFactor', 'info')
+    debug(config, `设置截图清晰度: ${config.template.deviceScaleFactor}x, 初始 viewport: ${viewportWidth}x10000`, 'deviceScaleFactor', 'info')
 
     // 拦截视频请求，避免加载视频导致超时
     await page.setRequestInterception(true)
@@ -138,6 +139,24 @@ export async function renderHtml2Image(
 
     // 使用 domcontentloaded 避免等待视频等慢速资源
     await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 })
+
+    // 获取实际内容高度，根据内容高度动态调整 viewport
+    const actualHeight = await page.evaluate(() => {
+      return Math.max(
+        document.body.offsetHeight,
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+      )
+    })
+    // 设置最小高度为 100，避免空内容时截图失败
+    const viewportHeight = Math.max(actualHeight, 100)
+
+    await page.setViewport({
+      width: viewportWidth,
+      height: viewportHeight,
+      deviceScaleFactor: config.template.deviceScaleFactor
+    })
+    debug(config, `根据内容高度动态设置 viewport: ${viewportWidth}x${viewportHeight}`, 'deviceScaleFactor', 'info')
 
     if (!config.basic.autoSplitImage) {
       // 使用 fullPage: true 让截图高度自适应实际内容
