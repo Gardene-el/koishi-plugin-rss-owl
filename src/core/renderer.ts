@@ -140,14 +140,31 @@ export async function renderHtml2Image(
     // 使用 domcontentloaded 避免等待视频等慢速资源
     await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 })
 
+    // 等待一小段时间让 CSS 和内容完全渲染
+    await new Promise(resolve => setTimeout(resolve, 500))
+
     // 获取实际内容高度，根据内容高度动态调整 viewport
-    const actualHeight = await page.evaluate(() => {
-      return Math.max(
-        document.body.offsetHeight,
-        document.documentElement.scrollHeight,
-        document.body.scrollHeight
-      )
-    })
+    // 使用 try-catch 防止获取失败
+    let actualHeight = 100
+    try {
+      actualHeight = await page.evaluate(() => {
+        // 先触发一次 layout，获取准确的内容高度
+        return Math.max(
+          document.body?.offsetHeight || 0,
+          document.documentElement?.scrollHeight || 0,
+          document.body?.scrollHeight || 0
+        )
+      })
+    } catch (e) {
+      debug(config, `获取内容高度失败: ${e}`, 'height error', 'error')
+    }
+
+    // 如果高度异常（接近初始 viewport 高度），使用保守估算
+    if (actualHeight >= 9000) {
+      debug(config, `内容高度异常 (${actualHeight})，使用保守估算`, 'height error', 'info')
+      actualHeight = 100
+    }
+
     // 设置最小高度为 100，避免空内容时截图失败
     const viewportHeight = Math.max(actualHeight, 100)
 
@@ -178,11 +195,17 @@ export async function renderHtml2Image(
     }
 
     let [height, width, x, y] = await page.evaluate(() => [
-      document.body.offsetHeight,
+      document.body?.offsetHeight || 0,
       document.body.offsetWidth,
-      parseInt(document.defaultView.getComputedStyle(document.body).marginLeft) || 0,
-      parseInt(document.defaultView.getComputedStyle(document.body).marginTop) || 0
+      parseInt(document.defaultView?.getComputedStyle(document.body)?.marginLeft) || 0,
+      parseInt(document.defaultView?.getComputedStyle(document.body)?.marginTop) || 0
     ])
+
+    // 保守处理：如果高度异常，使用更小的值
+    if (height > 5000) {
+      debug(config, `检测到异常高度 ${height}，进行裁剪`, 'height warn', 'info')
+      height = Math.min(height, 2000)
+    }
 
     let size = 10000
     debug(config, [height, width, x, y], 'pptr img size', 'details')
@@ -209,7 +232,8 @@ export async function renderHtml2Image(
     debug(config, { height, width, split }, 'split img', 'details')
 
     const reduceY = (index: number) => Math.floor(height / split * index)
-    const reduceHeight = (index: number) => Math.floor(height / split)
+    // 最后一份使用完整高度减去前面所有份的高度，确保覆盖全部内容
+    const reduceHeight = (index: number) => index === split - 1 ? height - reduceY(index) : Math.floor(height / split)
 
     let imgData = await Promise.all(
       Array.from({ length: split }, async (v, i) =>
