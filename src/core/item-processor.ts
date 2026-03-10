@@ -18,13 +18,79 @@ export class RssItemProcessor {
     private $http: any
   ) { }
 
+  private normalizeText(value: unknown): string {
+    if (Array.isArray(value)) {
+      return value.join('')
+    }
+    if (value === undefined || value === null) {
+      return ''
+    }
+    return String(value)
+  }
+
+  private isImageRenderEnabled(): boolean {
+    return this.config.basic?.imageMode === 'base64'
+      || this.config.basic?.imageMode === 'File'
+      || this.config.basic?.imageMode === 'assets'
+  }
+
+  private async prependAiSummarySection(
+    htmlContent: string,
+    item: any,
+    options?: {
+      contentStyle?: string
+      dividerStyle?: string
+    }
+  ): Promise<string> {
+    const aiSummary = this.normalizeText(item?.aiSummary).trim()
+    if (!aiSummary || !this.isImageRenderEnabled()) {
+      return htmlContent
+    }
+
+    const aiSummaryHtml = await marked(aiSummary)
+    const contentStyleAttr = options?.contentStyle ? ` style="${options.contentStyle}"` : ''
+    const dividerAttr = options?.dividerStyle
+      ? ` style="${options.dividerStyle}"`
+      : ' class="border-t border-slate-100 my-6"'
+
+    return `
+        <div class="ai-summary-section mb-6">
+          <div class="flex items-start gap-3 mb-3">
+            <div class="mt-0.5 w-6 h-6 rounded-md bg-primary/10 flex flex-shrink-0 items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-primary">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+              </svg>
+            </div>
+            <h3 class="text-sm font-bold text-slate-700">AI 摘要</h3>
+          </div>
+          <div class="pl-9 prose prose-slate prose-sm max-w-none"${contentStyleAttr}>
+            ${aiSummaryHtml}
+          </div>
+        </div>
+        <div${dividerAttr}></div>
+      ` + htmlContent
+  }
+
+  private async prepareHtmlForRender(html: any, arg: rssArg, useXml = false): Promise<string> {
+    if (arg?.proxyAgent?.enabled) {
+      await Promise.all(html('img').map(async (v: any, i: any) => {
+        const src = i.attribs?.src
+        if (!src) return
+        i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, src, arg, true)
+      }).get())
+    }
+    html('img').attr('style', 'object-fit:scale-down;max-width:100%;')
+    return useXml ? html.xml() : html.html()
+  }
+
   async parseRssItem(item: any, arg: rssArg, authorId: string | number): Promise<string> {
     debug(this.config, arg, 'rss arg', 'details');
     let template = arg.template;
     let msg = "";
     let html: any;
     let videoList: any[] = [];
-    item.description = item.description?.join?.('') || item.description;
+    item.title = this.normalizeText(item?.title);
+    item.description = this.normalizeText(item?.description);
 
     // HTML 安全清理
     const sanitizer = createSanitizer(this.config)
@@ -59,8 +125,8 @@ export class RssItemProcessor {
 
     //block
     arg.block?.forEach((blockWord: string) => {
-      item.description = item.description.replace(new RegExp(blockWord, 'gim'), i => Array(i.length).fill(this.config.msg?.blockString || '*').join(""));
-      item.title = item.title.replace(new RegExp(blockWord, 'gim'), i => Array(i.length).fill(this.config.msg?.blockString || '*').join(""));
+      item.description = this.normalizeText(item.description).replace(new RegExp(blockWord, 'gim'), i => Array(i.length).fill(this.config.msg?.blockString || '*').join(""));
+      item.title = this.normalizeText(item.title).replace(new RegExp(blockWord, 'gim'), i => Array(i.length).fill(this.config.msg?.blockString || '*').join(""));
     });
 
     if (this.config.basic?.videoMode === 'filter') {
@@ -186,36 +252,10 @@ export class RssItemProcessor {
     item.description = parseContent(this.config.template?.custom || '', { ...item, arg });
     debug(this.config, item.description, 'description');
 
-    // 如果有AI摘要，在图片渲染前将其注入到HTML中
-    const hasAiSummary = item.aiSummary && item.aiSummary.trim();
-    if (hasAiSummary && (this.config.basic?.imageMode === 'base64' || this.config.basic?.imageMode === 'File' || this.config.basic?.imageMode === 'assets')) {
-      // 将markdown转换为HTML
-      const aiSummaryHtml = await marked(item.aiSummary);
-      const aiSummarySection = `
-        <div class="ai-summary-section mb-6">
-          <div class="flex items-start gap-3 mb-3">
-            <div class="mt-0.5 w-6 h-6 rounded-md bg-primary/10 flex flex-shrink-0 items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-primary">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-              </svg>
-            </div>
-            <h3 class="text-sm font-bold text-slate-700">AI 摘要</h3>
-          </div>
-          <div class="pl-9 prose prose-slate prose-sm max-w-none">
-            ${aiSummaryHtml}
-          </div>
-        </div>
-        <div class="border-t border-slate-100 my-6"></div>
-      `;
-      item.description = aiSummarySection + item.description;
-    }
+    item.description = await this.prependAiSummarySection(item.description, item)
 
     html = cheerio.load(item.description);
-    if (arg?.proxyAgent?.enabled) {
-      await Promise.all(html('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
-    }
-    html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
-    let msg = await this.renderImage(html.html(), arg);
+    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
     return parseContent(this.config.template?.customRemark || '', { ...item, arg, description: msg });
   }
 
@@ -257,38 +297,12 @@ export class RssItemProcessor {
     item.description = parseContent(getDefaultTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize), { ...item, arg });
     debug(this.config, item.description, 'description');
 
-    // 如果有AI摘要，在图片渲染前将其注入到HTML中
-    const hasAiSummary = item.aiSummary && item.aiSummary.trim();
-    if (hasAiSummary && (this.config.basic?.imageMode === 'base64' || this.config.basic?.imageMode === 'File' || this.config.basic?.imageMode === 'assets')) {
-      // 将markdown转换为HTML
-      const aiSummaryHtml = await marked(item.aiSummary);
-      const aiSummarySection = `
-        <div class="ai-summary-section mb-6">
-          <div class="flex items-start gap-3 mb-3">
-            <div class="mt-0.5 w-6 h-6 rounded-md bg-primary/10 flex flex-shrink-0 items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-primary">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-              </svg>
-            </div>
-            <h3 class="text-sm font-bold text-slate-700">AI 摘要</h3>
-          </div>
-          <div class="pl-9 prose prose-slate prose-sm max-w-none">
-            ${aiSummaryHtml}
-          </div>
-        </div>
-        <div class="border-t border-slate-100 my-6"></div>
-      `;
-      item.description = aiSummarySection + item.description;
-    }
+    item.description = await this.prependAiSummarySection(item.description, item)
 
     html = cheerio.load(item.description);
-    if (arg?.proxyAgent?.enabled) {
-      await Promise.all(html('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
-    }
-    html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
     debug(this.config, `当前 imageMode: ${this.config.basic?.imageMode}`, 'imageMode', 'info');
 
-    let msg = await this.renderImage(html.html(), arg);
+    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
     return msg;
   }
 
@@ -296,43 +310,24 @@ export class RssItemProcessor {
     item.description = parseContent(getDescriptionTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize), { ...item, arg });
     debug(this.config, item.description, 'description');
 
-    // 如果有AI摘要，在图片渲染前将其注入到HTML中
-    const hasAiSummary = item.aiSummary && item.aiSummary.trim();
-    if (hasAiSummary && (this.config.basic?.imageMode === 'base64' || this.config.basic?.imageMode === 'File' || this.config.basic?.imageMode === 'assets')) {
-      // 将markdown转换为HTML
-      const aiSummaryHtml = await marked(item.aiSummary);
-      const aiSummarySection = `
-        <div class="ai-summary-section mb-6">
-          <div class="flex items-start gap-3 mb-3">
-            <div class="mt-0.5 w-6 h-6 rounded-md bg-primary/10 flex flex-shrink-0 items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-primary">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-              </svg>
-            </div>
-            <h3 class="text-sm font-bold text-slate-700">AI 摘要</h3>
-          </div>
-          <div class="pl-9 prose prose-slate prose-sm max-w-none" style="color: #475569; line-height: 1.6;">
-            ${aiSummaryHtml}
-          </div>
-        </div>
-        <div style="border-top: 1px solid #e2e8f0; margin: 24px 0;"></div>
-      `;
-      item.description = aiSummarySection + item.description;
-    }
+    item.description = await this.prependAiSummarySection(item.description, item, {
+      contentStyle: 'color: #475569; line-height: 1.6;',
+      dividerStyle: 'border-top: 1px solid #e2e8f0; margin: 24px 0;',
+    })
 
     html = cheerio.load(item.description);
-    if (arg?.proxyAgent?.enabled) {
-      await Promise.all(html('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
-    }
-    html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
 
-    let msg = await this.renderImage(html.html(), arg);
+    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
     return msg;
   }
 
   private async processLinkTemplate(item: any, arg: rssArg): Promise<string> {
     let html = cheerio.load(item.description);
-    let src = html('a')[0].attribs.href;
+    let src = html('a').first().attr('href') || this.normalizeText(item?.link);
+    if (!src) {
+      debug(this.config, 'link 模板未找到可用链接，回退原始内容', 'link src', 'info');
+      return this.normalizeText(item?.description)
+    }
     debug(this.config, src, 'link src', 'info');
 
     // URL 安全验证
@@ -347,16 +342,12 @@ export class RssItemProcessor {
     }
 
     let html2 = cheerio.load((await this.$http(src, arg)).data);
-    if (arg?.proxyAgent?.enabled) {
-      await Promise.all(html2('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
-    }
-    html2('img').attr('style', 'object-fit:scale-down;max-width:100%;');
     // link 模板使用订阅级参数设置 body 样式
     const bodyWidth = arg?.bodyWidth ?? this.config.template?.bodyWidth ?? 600
     const bodyPadding = arg?.bodyPadding ?? this.config.template?.bodyPadding ?? 20
     html2('body').attr('style', `width:${bodyWidth}px;padding:${bodyPadding}px;`);
 
-    let msg = await this.renderImage(html2.xml(), arg);
+    let msg = await this.renderImage(await this.prepareHtmlForRender(html2, arg, true), arg);
     return msg;
   }
 

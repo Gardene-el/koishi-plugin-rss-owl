@@ -2,9 +2,9 @@
  * 测试扁平化配置转换
  */
 
-import { normalizeSearchConfig } from '../lib/config'
-import { webSearch } from '../lib/core/search'
-import { Config } from '../lib/types'
+import { normalizeSearchConfig } from '../../lib/config'
+import { webSearch } from '../../lib/core/search'
+import { Config } from '../../lib/types'
 
 // 模拟扁平化的 WebUI 配置
 const flatSearchConfig = {

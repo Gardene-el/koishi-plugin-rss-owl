@@ -142,8 +142,38 @@ describe('Feeder - 生产者逻辑', () => {
         protocol: 'http',
         host: 'proxy.example.com',
         port: 8080,
-        auth: { username: 'user', password: 'pass' },
+        auth: { enabled: true, username: 'user', password: 'pass' },
       })
+    })
+
+    it('应该在代理参数后继续解析后续键值对', () => {
+      const options = { arg: 'proxyAgent:socks5://127.0.0.1:7890,forceLength:3,reverse:true' }
+      const result = formatArg(options, mockConfig)
+
+      expect(result.proxyAgent).toEqual({
+        enabled: true,
+        protocol: 'socks5',
+        host: '127.0.0.1',
+        port: 7890,
+      })
+      expect(result.forceLength).toBe(3)
+      expect(result.reverse).toBe(true)
+    })
+
+    it('应该支持包含逗号和冒号的过滤词', () => {
+      const options = { arg: 'filter:/hello,world//foo:bar/,forceLength:2' }
+      const result = formatArg(options, mockConfig)
+
+      expect(result.filter).toEqual(['hello,world', 'foo:bar'])
+      expect(result.forceLength).toBe(2)
+    })
+
+    it('应该解析 bodyFontSize 和 split 参数', () => {
+      const options = { arg: 'bodyFontSize:18,split:4' }
+      const result = formatArg(options, mockConfig)
+
+      expect(result.bodyFontSize).toBe(18)
+      expect(result.split).toBe(4)
     })
 
     it('应该只保留已知的键', () => {
@@ -153,6 +183,14 @@ describe('Feeder - 生产者逻辑', () => {
       expect(result.forceLength).toBe(5)
       expect((result as any).unknownKey).toBeUndefined()
       expect((result as any).another).toBeUndefined()
+    })
+
+    it('应该忽略非法数字参数而不污染结果', () => {
+      const options = { arg: 'forceLength:not-a-number,timeout:30000' }
+      const result = formatArg(options, mockConfig) as any
+
+      expect(result.forceLength).toBeUndefined()
+      expect(result.timeout).toBe(30000)
     })
   })
 

@@ -1,5 +1,5 @@
-import { searchWithVolcengine } from '../src/core/search'
-import { Config } from '../src/types'
+import { searchWithVolcengine } from '../../src/core/search'
+import { Config } from '../../src/types'
 
 const testConfig: Config = {
   ai: {

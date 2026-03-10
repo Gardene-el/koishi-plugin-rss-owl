@@ -62,72 +62,179 @@ export function getLastContent(item: any, config: Config) {
   return { ...obj, description: String(obj?.description).replaceAll(/\s/g, '') }
 }
 
-export function formatArg(options: any, config: Config): rssArg {
-  let { arg, template, auth } = options
+const ARG_ENTRY_KEYS = [
+  'forceLength',
+  'reverse',
+  'timeout',
+  'interval',
+  'merge',
+  'maxRssItem',
+  'firstLoad',
+  'bodyWidth',
+  'bodyPadding',
+  'bodyFontSize',
+  'split',
+  'filter',
+  'block',
+  'proxyAgent',
+] as const
 
-  const parseArrayArg = (value: string): string[] => {
-    return value
-      .split('/')
-      .map(item => item.trim())
-      .filter(Boolean)
+type ArgEntryKey = typeof ARG_ENTRY_KEYS[number]
+
+const BOOLEAN_ARG_KEYS = new Set<ArgEntryKey>(['firstLoad', 'reverse', 'merge'])
+const NUMBER_ARG_KEYS = new Set<ArgEntryKey>([
+  'forceLength',
+  'timeout',
+  'interval',
+  'maxRssItem',
+  'bodyWidth',
+  'bodyPadding',
+  'bodyFontSize',
+  'split',
+])
+const ARRAY_ARG_KEYS = new Set<ArgEntryKey>(['filter', 'block'])
+const FALSE_CONTENT = new Set(['false', 'null', 'none', ''])
+
+function parseArrayArg(value: string): string[] {
+  return value
+    .split('/')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function extractKnownArgEntries(arg?: string): Partial<Record<ArgEntryKey, string>> {
+  if (!arg) return {}
+
+  const pattern = new RegExp(`(^|,)\\s*(${ARG_ENTRY_KEYS.join('|')})\\s*:`, 'g')
+  const matches = [...arg.matchAll(pattern)]
+  const result: Partial<Record<ArgEntryKey, string>> = {}
+
+  for (let index = 0; index < matches.length; index++) {
+    const currentMatch = matches[index]
+    const nextMatch = matches[index + 1]
+    const key = currentMatch[2] as ArgEntryKey
+    const valueStart = (currentMatch.index ?? 0) + currentMatch[0].length
+    const valueEnd = nextMatch?.index ?? arg.length
+    result[key] = arg.slice(valueStart, valueEnd).replace(/,\s*$/, '').trim()
   }
 
-  // 特殊处理：提取完整的 proxyAgent URL
-  let proxyAgentUrl: string | undefined
-  if (arg && arg.includes('proxyAgent:')) {
-    const match = arg.match(/proxyAgent:([^,]+)/)
-    if (match) {
-      proxyAgentUrl = match[1]
-      // 从 arg 中移除 proxyAgent，避免被 split(":") 破坏
-      arg = arg.replace(/proxyAgent:[^,]+/, '').replace(/^,|,$/g, '').replace(/,,/g, ',')
+  return result
+}
+
+function parseBooleanArg(value: unknown): boolean {
+  return !FALSE_CONTENT.has(String(value ?? '').trim().toLowerCase())
+}
+
+function parseNumberArg(value: unknown): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function normalizeScalarArgValue(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value
+  }
+  return value.split(',')[0].trim()
+}
+
+function parseProxyAgentArg(value: unknown, auth?: string): rssArg['proxyAgent'] | undefined {
+  if (typeof value === 'object' && value !== null) {
+    return value as rssArg['proxyAgent']
+  }
+
+  const normalizedValue = String(normalizeScalarArgValue(value) ?? '').trim()
+  if (FALSE_CONTENT.has(normalizedValue.toLowerCase())) {
+    return { enabled: false }
+  }
+
+  const proxyUrl = normalizedValue.includes('://') ? normalizedValue : `http://${normalizedValue}`
+
+  try {
+    const parsedUrl = new URL(proxyUrl)
+    const protocol = parsedUrl.protocol.replace(':', '') || 'http'
+    const host = parsedUrl.hostname
+    const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 7890
+
+    if (!host) return undefined
+
+    const proxyAgent: rssArg['proxyAgent'] = {
+      enabled: true,
+      protocol,
+      host,
+      port,
+    }
+
+    if (auth) {
+      const [username = '', password = ''] = auth.split('/')
+      if (username) {
+        proxyAgent.auth = { enabled: true, username, password }
+      }
+    }
+
+    return proxyAgent
+  } catch {
+    return undefined
+  }
+}
+
+export function formatArg(options: any, config: Config): rssArg {
+  const { arg, template, auth } = options || {}
+  const rawEntries: Record<string, unknown> = typeof arg === 'string'
+    ? extractKnownArgEntries(arg)
+    : (arg || {})
+  const json: Partial<rssArg> = {}
+
+  for (const [rawKey, rawValue] of Object.entries(rawEntries)) {
+    const key = rawKey as ArgEntryKey
+
+    if (!ARG_ENTRY_KEYS.includes(key)) continue
+
+    if (key === 'proxyAgent') {
+      const proxyAgent = parseProxyAgentArg(rawValue, auth)
+      if (proxyAgent) {
+        json.proxyAgent = proxyAgent
+      }
+      continue
+    }
+
+    if (ARRAY_ARG_KEYS.has(key)) {
+      if (Array.isArray(rawValue)) {
+        json[key] = rawValue.filter(Boolean) as never
+      } else {
+        const parsedArray = parseArrayArg(String(rawValue ?? ''))
+        if (parsedArray.length) {
+          json[key] = parsedArray as never
+        }
+      }
+      continue
+    }
+
+    if (BOOLEAN_ARG_KEYS.has(key)) {
+      json[key] = parseBooleanArg(normalizeScalarArgValue(rawValue)) as never
+      continue
+    }
+
+    if (NUMBER_ARG_KEYS.has(key)) {
+      const parsedNumber = parseNumberArg(normalizeScalarArgValue(rawValue))
+      if (parsedNumber !== undefined) {
+        json[key] = parsedNumber as never
+      }
+      continue
+    }
+
+    if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
+      json[key] = String(rawValue).trim() as never
     }
   }
 
-  let json = Object.assign({}, ...(arg?.split(',')?.map((i: string) => ({ [i.split(":")[0]]: i.split(":")[1] })) || []))
-  let key = ["forceLength", "reverse", "timeout", "interval", "merge", "maxRssItem", "firstLoad", "bodyWidth", "bodyPadding", "filter", "block"]
-  let booleanKey = ['firstLoad', "reverse", 'merge']
-  let numberKey = ['forceLength', "timeout", 'interval', 'maxRssItem', 'bodyWidth', 'bodyPadding']
-  let falseContent = ['false', 'null', '']
-
-  json = Object.assign({}, ...Object.keys(json).filter((i: string) => key.some((key: string) => key == i)).map((key: string) => ({ [key]: booleanKey.some((bkey: string) => bkey == key) ? !falseContent.some((c: string) => c == json[key]) : numberKey.some((nkey: string) => nkey == key) ? (+json[key]) : json[key] })))
-
   if (template && config.template) {
-    json['template'] = template
+    json.template = template
   }
 
   // Date/Number conversions
-  if (json.interval) json.interval = parseInt(json.interval) * 1000
-  if (json.forceLength) json.forceLength = parseInt(json.forceLength)
+  if (typeof json.interval === 'number') json.interval *= 1000
 
-  // Array conversions
-  if (json.filter && typeof json.filter === 'string') json.filter = parseArrayArg(json.filter)
-  if (json.block && typeof json.block === 'string') json.block = parseArrayArg(json.block)
-
-  // Proxy Argument Parsing (使用提取的完整 URL)
-  if (proxyAgentUrl) {
-    if (['false', 'none', ''].includes(String(proxyAgentUrl))) {
-      json.proxyAgent = { enabled: false }
-    } else if (typeof proxyAgentUrl === 'string') {
-      // Parse string proxy: socks5://127.0.0.1:7890
-      let protocolMatch = proxyAgentUrl.match(/^(http|https|socks5)/)
-      let protocol = protocolMatch ? protocolMatch[1] : 'http'
-      let hostMatch = proxyAgentUrl.match(/:\/\/([^:\/]+)/)
-      let host = hostMatch ? hostMatch[1] : ''
-      let portMatch = proxyAgentUrl.match(/:(\d+)/)
-      let port = portMatch ? parseInt(portMatch[1]) : 7890
-
-      let proxyAgentObj: any = { enabled: true, protocol, host, port }
-
-      // Use auth from options if provided
-      if (auth) {
-        let [username, password] = auth.split("/")
-        proxyAgentObj.auth = { username, password }
-      }
-      json.proxyAgent = proxyAgentObj
-    }
-  }
-
-  return json
+  return json as rssArg
 }
 
 const mergeProxyAgent = (argProxy: any, configProxy: any, config: Config) => {

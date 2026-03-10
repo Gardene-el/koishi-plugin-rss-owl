@@ -1,5 +1,5 @@
-import { searchWithTavily, searchWithSearxng, searchWithVolcengine, webSearch } from '../lib/core/search'
-import { Config, SearchConfig } from '../lib/types'
+import { searchWithTavily, searchWithSearxng, searchWithVolcengine, webSearch } from '../../lib/core/search'
+import { Config, SearchConfig } from '../../lib/types'
 
 const testConfig: Config = {
   ai: {

@@ -3,7 +3,7 @@
  */
 
 import axios from 'axios'
-import { Config } from '../src/types'
+import { Config } from '../../src/types'
 
 const API_KEY = '071126d1-6d02-48b7-a4c8-4d2ede320560'
 const BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'

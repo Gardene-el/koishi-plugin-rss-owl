@@ -2,8 +2,8 @@
  * 测试模型轮询和自动引擎选择功能
  */
 
-import { webSearch } from '../lib/core/search'
-import { Config, SearchConfig } from '../lib/types'
+import { webSearch } from '../../lib/core/search'
+import { Config, SearchConfig } from '../../lib/types'
 
 const testConfig: Config = {
   ai: {
