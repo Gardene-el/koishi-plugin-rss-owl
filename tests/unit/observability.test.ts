@@ -3,7 +3,7 @@
  * 测试结构化日志、性能监控和错误追踪
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals'
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
 import {
   StructuredLogger,
   LogLevel,
@@ -27,6 +27,7 @@ import {
   recordAiSummary
 } from '../../src/utils/metrics'
 import { Config } from '../../src/types'
+import { logger as coreLogger } from '../../src/utils/logger'
 
 // Mock config
 const mockConfig: Config = {
@@ -39,24 +40,33 @@ const mockConfig: Config = {
 }
 
 describe('结构化日志系统', () => {
-  let logger: StructuredLogger
+  let structuredLogger: StructuredLogger
+  let infoSpy: jest.SpiedFunction<any>
+  let errorSpy: jest.SpiedFunction<any>
 
   beforeEach(() => {
-    logger = new StructuredLogger(mockConfig, false)
+    structuredLogger = new StructuredLogger(mockConfig, false)
+    infoSpy = jest.spyOn(coreLogger, 'info').mockImplementation(() => undefined as any)
+    errorSpy = jest.spyOn(coreLogger, 'error').mockImplementation(() => undefined as any)
+  })
+
+  afterEach(() => {
+    infoSpy.mockRestore()
+    errorSpy.mockRestore()
   })
 
   describe('StructuredLogger', () => {
     it('应该创建日志实例', () => {
-      expect(logger).toBeInstanceOf(StructuredLogger)
+      expect(structuredLogger).toBeInstanceOf(StructuredLogger)
     })
 
     it('应该创建性能计时器', () => {
-      const timer = logger.createTimer()
+      const timer = structuredLogger.createTimer()
       expect(timer).toBeInstanceOf(PerformanceTimer)
     })
 
     it('应该正确计算耗时', async () => {
-      const timer = logger.createTimer()
+      const timer = structuredLogger.createTimer()
       await new Promise(resolve => setTimeout(resolve, 100))
       const duration = timer.getDuration()
 
@@ -65,7 +75,7 @@ describe('结构化日志系统', () => {
     })
 
     it('应该正确计算内存使用', () => {
-      const timer = logger.createTimer()
+      const timer = structuredLogger.createTimer()
       const memory1 = timer.getMemoryUsage()
 
       // 分配一些内存
@@ -76,7 +86,7 @@ describe('结构化日志系统', () => {
     })
 
     it('应该正确记录性能数据', () => {
-      const timer = logger.createTimer()
+      const timer = structuredLogger.createTimer()
       timer.getMetrics()
 
       const metrics = timer.getMetrics()
@@ -84,6 +94,26 @@ describe('结构化日志系统', () => {
       expect(metrics).toHaveProperty('memory')
       expect(typeof metrics.duration).toBe('number')
       expect(typeof metrics.memory).toBe('number')
+    })
+
+    it('应该通过主日志入口输出信息日志', () => {
+      structuredLogger.info('Test message', 'TestModule')
+
+      expect(infoSpy).toHaveBeenCalledTimes(1)
+      const output = String(infoSpy.mock.calls[0][0])
+      expect(output).toContain('[INFO]')
+      expect(output).toContain('[TestModule]')
+      expect(output).toContain('Test message')
+    })
+
+    it('应该通过主日志入口输出错误日志', () => {
+      structuredLogger.error('Test error occurred', 'TestModule', new Error('Test error'))
+
+      expect(errorSpy).toHaveBeenCalledTimes(1)
+      const output = String(errorSpy.mock.calls[0][0])
+      expect(output).toContain('[ERROR]')
+      expect(output).toContain('[TestModule]')
+      expect(output).toContain('Test error occurred')
     })
   })
 

@@ -3,6 +3,136 @@ import { Config, debugLevel } from '../types'
 
 const logger = new Logger('rss-owl')
 
+export type DebugLogType = "disable" | "error" | "info" | "details"
+
+export function shouldLog(config: Config, type: DebugLogType): boolean {
+  const typeLevel = debugLevel.findIndex(i => i === type)
+  if (typeLevel < 1) return false
+
+  const configLevel = debugLevel.findIndex(i => i === config.debug)
+  if (configLevel < 0) return false
+
+  return typeLevel <= configLevel
+}
+
+/**
+ * 敏感信息模式定义
+ */
+const SENSITIVE_PATTERNS = [
+  // API Key 模式
+  { pattern: /api[_-]?key["']?\s*[:=]\s*["']?([^"'&\s,}]+)/gi, replacement: 'api_key=***' },
+  // Bearer Token
+  { pattern: /Bearer\s+([A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)/gi, replacement: 'Bearer ***' },
+  // Basic Auth
+  { pattern: /Basic\s+([A-Za-z0-9+/=]+)/gi, replacement: 'Basic ***' },
+  // 代理认证
+  { pattern: /([a-zA-Z]+):\/\/([^:]+):([^@]+)@/gi, replacement: '$1://$2:***@' },
+  // 密码字段
+  { pattern: /["']?password["']?\s*[:=]\s*["']?([^"'&\s,}]+)/gi, replacement: 'password=***' },
+  // 密钥字段
+  { pattern: /["']?secret["']?\s*[:=]\s*["']?([^"'&\s,}]+)/gi, replacement: 'secret=***' },
+  { pattern: /["']?token["']?\s*[:=]\s*["']?([^"'&\s,}]+)/gi, replacement: 'token=***' },
+  // AWS Access Key
+  { pattern: /(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g, replacement: '***' },
+  // GitHub Token
+  { pattern: /(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}/g, replacement: '***' },
+  // JWT Token (更精确的匹配)
+  { pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, replacement: '***' },
+]
+
+/**
+ * 脱敏日志消息，移除敏感信息
+ *
+ * @param message - 原始消息（字符串或对象）
+ * @returns 脱敏后的消息
+ */
+function sanitizeLogMessage(message: any): any {
+  if (typeof message === 'string') {
+    let sanitized = message
+    for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
+      sanitized = sanitized.replace(pattern, replacement)
+    }
+    return sanitized
+  }
+
+  if (message === null || message === undefined) {
+    return message
+  }
+
+  if (message instanceof Error) {
+    const sanitizedError = new Error(sanitizeLogMessage(message.message))
+    sanitizedError.name = message.name
+    return sanitizedError
+  }
+
+  // 如果是对象，深度脱敏
+  if (typeof message === 'object') {
+    try {
+      // 先序列化再脱敏，然后反序列化
+      const jsonStr = JSON.stringify(message)
+      let sanitized = jsonStr
+
+      for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
+        sanitized = sanitized.replace(pattern, replacement)
+      }
+
+      return JSON.parse(sanitized)
+    } catch {
+      // 如果序列化失败，返回原始对象的脱敏版本
+      return sanitizeObject(message)
+    }
+  }
+
+  return message
+}
+
+/**
+ * 递归脱敏对象中的敏感字段
+ */
+function sanitizeObject(obj: any, depth = 0): any {
+  // 防止无限递归
+  if (depth > 5 || obj === null || obj === undefined) {
+    return obj
+  }
+
+  // 敏感字段列表
+  const sensitiveFields = new Set([
+    'password', 'passwd', 'secret', 'token', 'apiKey', 'api_key',
+    'apikey', 'accessToken', 'access_token', 'refreshToken', 'refresh_token',
+    'auth', 'authorization', 'credential', 'privateKey', 'private_key',
+    'sessionId', 'session_id', 'sessionid', 'cookie', 'x-api-key',
+    'x-api-key', 'bearer', 'basic'
+  ])
+
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeObject(item, depth + 1))
+  }
+
+  if (typeof obj === 'object') {
+    const result: Record<string, any> = {}
+    for (const [key, value] of Object.entries(obj)) {
+      const lowerKey = key.toLowerCase()
+      if (sensitiveFields.has(lowerKey) || lowerKey.includes('secret') || lowerKey.includes('token')) {
+        result[key] = '***'
+      } else if (typeof value === 'object') {
+        result[key] = sanitizeObject(value, depth + 1)
+      } else if (typeof value === 'string') {
+        // 检查字符串值是否包含可能的 token
+        if (value.length > 30 && /[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+/.test(value)) {
+          result[key] = '***'
+        } else {
+          result[key] = value
+        }
+      } else {
+        result[key] = value
+      }
+    }
+    return result
+  }
+
+  return obj
+}
+
 /**
  * 结构化日志接口
  */
@@ -12,6 +142,15 @@ interface StructuredLogEntry {
   module?: string
   message: string
   context?: Record<string, any>
+}
+
+function emitLog(type: DebugLogType, content: string): void {
+  if (type === 'error') {
+    logger.error(content)
+    return
+  }
+
+  logger.info(content)
 }
 
 /**
@@ -27,12 +166,19 @@ export function debug(
   config: Config,
   message: any,
   name = '',
-  type: "disable" | "error" | "info" | "details" = 'details',
+  type: DebugLogType = 'details',
   context?: Record<string, any>
 ) {
-  const typeLevel = debugLevel.findIndex(i => i == type)
-  if (typeLevel < 1) return
-  if (typeLevel > debugLevel.findIndex(i => i == config.debug)) return
+  if (!shouldLog(config, type)) return
+
+  // 检查是否启用日志脱敏（默认启用）
+  const sanitizeEnabled = config.logging?.sanitizeLogs !== false
+  if (sanitizeEnabled) {
+    message = sanitizeLogMessage(message)
+    if (context) {
+      context = sanitizeObject(context)
+    }
+  }
 
   // 获取日志配置
   const loggingConfig = config.logging || {}
@@ -41,6 +187,10 @@ export function debug(
   let formattedMessage: string
   if (typeof message === 'string') {
     formattedMessage = message
+  } else if (message instanceof Error) {
+    formattedMessage = message.message || String(message)
+  } else if (typeof message === 'function') {
+    formattedMessage = String(message)
   } else if (message === null || message === undefined) {
     formattedMessage = String(message)
   } else {
@@ -97,7 +247,7 @@ export function debug(
     }
 
     // 输出结构化日志
-    logger.info(JSON.stringify(logEntry))
+    emitLog(type, JSON.stringify(logEntry))
   } else {
     // 传统文本格式
     let textOutput = formattedMessage
@@ -115,7 +265,7 @@ export function debug(
       textOutput += ` | ${contextStr}`
     }
 
-    logger.info(textOutput)
+    emitLog(type, textOutput)
   }
 }
 
@@ -162,7 +312,7 @@ export function createDebugWithContext(
   return (
     message: any,
     name = '',
-    type: "disable" | "error" | "info" | "details" = 'details',
+    type: DebugLogType = 'details',
     additionalContext?: Record<string, any>
   ) => {
     const mergedContext = {

@@ -2,8 +2,11 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Context } from 'koishi'
 import { Config, rssArg } from '../types'
-import { debug } from './logger'
+import { normalizeError } from './error-handler'
+import { trackError } from './error-tracker'
+import { createDebugWithContext } from './logger'
 import { sleep } from './common'
+import { validateUrlOrThrow, SecurityError, getSecurityOptions } from './security'
 
 // 简化版 RequestManager，仅用于普通 API 请求，大文件下载建议绕过
 export class RequestManager {
@@ -70,16 +73,43 @@ export class RequestManager {
 
 export const createHttpFunction = (ctx: Context, config: Config, requestManager: RequestManager) => {
   return async (url: string, arg: rssArg, requestConfig: any = {}) => {
+    const isHeavyRequest = requestConfig.responseType === 'arraybuffer' || requestConfig.responseType === 'stream'
+    const requestType = isHeavyRequest ? 'heavy' : 'normal'
+    const requestTimeout = (arg.timeout || 60) * 1000
+    const requestDebug = createDebugWithContext(config, {
+      url,
+      requestType,
+      isHeavyRequest,
+      timeout: requestTimeout,
+    })
+
+    // URL 安全验证
+    try {
+      validateUrlOrThrow(url, getSecurityOptions(config))
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        const normalizedError = normalizeError(error)
+        requestDebug(`URL 安全验证失败: ${normalizedError.message}`, 'security', 'error', {
+          stage: 'security-validation',
+        })
+        trackError(normalizedError, {
+          url,
+          requestType,
+          isHeavyRequest,
+          stage: 'security-validation',
+        })
+        throw error
+      }
+      throw error
+    }
 
     // 关键修改：如果检测到是大文件下载（responseType 为 arraybuffer 或 stream），绕过队列直接请求
     // 这样避免视频下载阻塞 RSS 轮询，也避免因队列超时导致下载失败
-    const isHeavyRequest = requestConfig.responseType === 'arraybuffer' || requestConfig.responseType === 'stream'
-
     const makeRequest = async () => {
       // 基础配置
-      debug(config, `[DEBUG_PROXY] fetcher makeRequest arg.proxyAgent: ${JSON.stringify(arg?.proxyAgent)}`, 'request', 'details')
+      requestDebug(`[DEBUG_PROXY] fetcher makeRequest arg.proxyAgent: ${JSON.stringify(arg?.proxyAgent)}`, 'request', 'details')
       let configObj: any = {
-        timeout: (arg.timeout || 60) * 1000,
+        timeout: requestTimeout,
         headers: {
           'User-Agent': config.net.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
@@ -100,11 +130,16 @@ export const createHttpFunction = (ctx: Context, config: Config, requestManager:
             port: config.net.proxyAgent.port,
             auth: config.net.proxyAgent.auth?.enabled ? config.net.proxyAgent.auth : undefined
           }
-          debug(config, `[DEBUG_PROXY] fetcher 使用防御性全局代理`, 'request', 'details')
+          requestDebug(`[DEBUG_PROXY] fetcher 使用防御性全局代理`, 'request', 'details', {
+            proxyEnabled: true,
+            proxyUrl: config.net.proxyAgent.host
+              ? `${config.net.proxyAgent.protocol}://${config.net.proxyAgent.host}:${config.net.proxyAgent.port}`
+              : '',
+          })
         }
       }
 
-      const proxyEnabled = currentProxyAgent?.enabled
+      const proxyEnabled = Boolean(currentProxyAgent?.enabled)
       let proxyUrl = ''
       if (proxyEnabled && currentProxyAgent.host) {
         proxyUrl = `${currentProxyAgent.protocol}://${currentProxyAgent.host}:${currentProxyAgent.port}`
@@ -122,17 +157,21 @@ export const createHttpFunction = (ctx: Context, config: Config, requestManager:
       }
 
       const finalConfig = { ...configObj, ...requestConfig }
+      const requestContext = {
+        proxyEnabled,
+        proxyUrl,
+      }
 
       // 对于重请求，打印更详细的日志（包含代理状态）
       if (isHeavyRequest) {
         const proxyInfo = proxyEnabled ? ` [代理: ${proxyUrl}]` : ' [直连]'
-        debug(config, `Heavy Request${proxyInfo}: ${url}`, 'request', 'details')
+        requestDebug(`Heavy Request${proxyInfo}: ${url}`, 'request', 'details', requestContext)
       } else {
-        debug(config, `Request: ${url}`, 'request', 'details')
+        requestDebug(`Request: ${url}`, 'request', 'details', requestContext)
       }
 
       let retries = 3
-      let lastError
+      let lastError: any
 
       while (retries > 0) {
         try {
@@ -145,13 +184,34 @@ export const createHttpFunction = (ctx: Context, config: Config, requestManager:
           const errMsg = error.message || error.code || error
 
           if (retries > 0) {
-            debug(config, `[Request Retry] 剩余 ${retries} 次: ${url} [Status: ${status}] ${errMsg}`, 'request', 'info')
+            requestDebug(`[Request Retry] 剩余 ${retries} 次: ${url} [Status: ${status}] ${errMsg}`, 'request', 'info', {
+              ...requestContext,
+              retryCount: 3 - retries,
+              retriesRemaining: retries,
+              status,
+            })
             await sleep(1500) // 增加重试间隔
           }
         }
       }
 
-      throw lastError || new Error('Max retries reached')
+      const normalizedError = normalizeError(lastError || new Error('Max retries reached'))
+      const status = lastError?.response?.status || 'Unknown'
+
+      requestDebug(`Request failed after retries: ${normalizedError.message}`, 'request', 'error', {
+        ...requestContext,
+        status,
+        retriesRemaining: 0,
+      })
+      trackError(normalizedError, {
+        url,
+        requestType,
+        isHeavyRequest,
+        status,
+        ...requestContext,
+      })
+
+      throw normalizedError
     }
 
     if (isHeavyRequest) {

@@ -1,6 +1,6 @@
 import { Schema } from 'koishi'
 // 导入接口时重命名为 ConfigType，避免与下方的常量名冲突
-import { Config as ConfigType, BasicConfig, TemplateConfig, NetConfig, MsgConfig, AiConfig, SearchConfig, proxyAgent } from './types'
+import { Config as ConfigType, BasicConfig, TemplateConfig, NetConfig, MsgConfig, AiConfig, SearchConfig, proxyAgent, SecurityConfig } from './types'
 
 export const templateList = ['auto','content', 'only text', 'only media','only image', 'only video', 'proto', 'default', 'only description', 'custom','link'] as const
 
@@ -169,6 +169,16 @@ export const Config: Schema<ConfigType> = Schema.object({
     enabled: Schema.boolean().description('启用消息缓存').default(true),
     maxSize: Schema.number().description('最大缓存消息条数').default(100),
   }).description('消息缓存设置'),
+  security: Schema.object({
+    enabled: Schema.boolean().description('启用安全检查（建议开启）').default(false),
+    allowInternalAccess: Schema.boolean().description('允许访问内网 IP 地址（如本地部署的 RSSHub）').default(false),
+    whitelist: Schema.array(Schema.string()).description('URL 白名单域名').default([]),
+    blacklist: Schema.array(Schema.string()).description('URL 黑名单域名').default([]),
+    allowHttp: Schema.boolean().description('允许 HTTP 协议').default(true),
+    allowHttps: Schema.boolean().description('允许 HTTPS 协议').default(true),
+    sanitizeHtml: Schema.boolean().description('启用 RSS 原始 HTML 内容清理').default(true),
+    maxCacheSize: Schema.number().description('AI 摘要缓存最大条数').default(1000),
+  }).description('安全设置'),
   // customUrlEnable:Schema.boolean().description('开发中：允许使用自定义规则对网页进行提取，用于对非RSS链接抓取').default(false).experimental(),
   debug: Schema.union(["disable","error","info","details"] as const).default("disable").description('调试级别'),
   logging: Schema.object({
@@ -178,7 +188,16 @@ export const Config: Schema<ConfigType> = Schema.object({
     includeModule: Schema.boolean().description('包含模块名').default(true),
     includeContext: Schema.boolean().description('包含额外上下文信息').default(false),
     contextFields: Schema.array(Schema.string()).description('要包含的上下文字段（如 guildId, platform 等）').default([]),
+    sanitizeLogs: Schema.boolean().description('自动脱敏日志中的敏感信息').default(true),
   }).description('日志设置'),
+  errorTracking: Schema.object({
+    enabled: Schema.boolean().description('启用错误追踪').default(false),
+    dsn: Schema.string().role('secret').description('Sentry DSN').default(''),
+    environment: Schema.string().description('错误追踪环境').default('production'),
+    release: Schema.string().description('错误追踪版本号').default('5.0.0-beta'),
+    tracesSampleRate: Schema.number().min(0).max(1).description('性能追踪采样率').default(0.1),
+    profilesSampleRate: Schema.number().min(0).max(1).description('性能分析采样率').default(0.1),
+  }).description('错误追踪设置'),
 })
 
 // 导出 ConfigType 作为类型别名，供其他模块使用

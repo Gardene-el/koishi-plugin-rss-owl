@@ -7,6 +7,7 @@ import {
   getErrorType,
   getFriendlyErrorMessage,
   createError,
+  normalizeError,
   isNetworkError,
   isParseError,
   isPermissionError,
@@ -108,6 +109,31 @@ describe('error-handler', () => {
       const error = createError('Custom error message', ErrorType.AI_ERROR)
       expect(error.message).toBe('Custom error message')
       expect((error as any).errorType).toBe(ErrorType.AI_ERROR)
+    })
+  })
+
+  describe('normalizeError', () => {
+    it('should return the original Error instance', () => {
+      const error = new Error('original error')
+      expect(normalizeError(error)).toBe(error)
+    })
+
+    it('should convert string to Error', () => {
+      const normalized = normalizeError('string error')
+      expect(normalized).toBeInstanceOf(Error)
+      expect(normalized.message).toBe('string error')
+    })
+
+    it('should convert object to Error and preserve properties', () => {
+      const normalized = normalizeError({ message: 'object error', code: 'E_TEST' }) as Error & { code?: string }
+      expect(normalized).toBeInstanceOf(Error)
+      expect(normalized.message).toBe('object error')
+      expect(normalized.code).toBe('E_TEST')
+    })
+
+    it('should use fallback message for null and undefined', () => {
+      expect(normalizeError(null, 'fallback').message).toBe('fallback')
+      expect(normalizeError(undefined, 'fallback').message).toBe('fallback')
     })
   })
 

@@ -13,6 +13,7 @@ import { normalizeSearchConfig } from '../config'
 interface CacheEntry {
   summary: string
   timestamp: number
+  lastAccess: number  // 用于 LRU
 }
 
 /**
@@ -31,9 +32,58 @@ interface SummaryResult {
 export class AiSummaryCache {
   private cache: Map<string, CacheEntry> = new Map()
   private ttl: number // 缓存过期时间（毫秒）
+  private maxSize: number // 最大缓存条数
+  private accessOrder: string[] = // LRU 访问顺序追踪
+    []
 
-  constructor(ttl: number = 24 * 60 * 60 * 1000) {
+  constructor(ttl: number = 24 * 60 * 60 * 1000, maxSize: number = 1000) {
     this.ttl = ttl
+    this.maxSize = maxSize
+  }
+
+  /**
+   * 触发 LRU 淘汰，移除最久未访问的条目
+   */
+  private evictIfNeeded(): void {
+    // 如果缓存未达到最大限制，不需要淘汰
+    // 注意：这里用 > 而不是 >=，确保添加新项后不会超过限制
+    while (this.cache.size >= this.maxSize && this.accessOrder.length > 0) {
+      const oldestKey = this.accessOrder.shift()
+      if (oldestKey && this.cache.has(oldestKey)) {
+        this.cache.delete(oldestKey)
+      }
+      // 防止死循环，如果 accessOrder 为空但 cache 仍满，随机删除一个
+      if (this.accessOrder.length === 0 && this.cache.size >= this.maxSize) {
+        const randomKey = this.cache.keys().next().value
+        if (randomKey) {
+          this.cache.delete(randomKey)
+        }
+        break
+      }
+    }
+  }
+
+  /**
+   * 更新访问顺序（LRU）
+   */
+  private updateAccessOrder(key: string): void {
+    // 从当前位置移除（如果存在）
+    const index = this.accessOrder.indexOf(key)
+    if (index > -1) {
+      this.accessOrder.splice(index, 1)
+    }
+    // 添加到末尾（最近访问）
+    this.accessOrder.push(key)
+  }
+
+  /**
+   * 从访问顺序中移除指定键
+   */
+  private removeAccessOrder(key: string): void {
+    const index = this.accessOrder.indexOf(key)
+    if (index > -1) {
+      this.accessOrder.splice(index, 1)
+    }
   }
 
   /**
@@ -59,8 +109,13 @@ export class AiSummaryCache {
     // 检查是否过期
     if (Date.now() - entry.timestamp > this.ttl) {
       this.cache.delete(key)
+      this.removeAccessOrder(key)
       return null
     }
+
+    // 更新访问顺序（LRU）
+    this.updateAccessOrder(key)
+    entry.lastAccess = Date.now()
 
     return entry.summary
   }
@@ -70,10 +125,28 @@ export class AiSummaryCache {
    */
   set(title: string, content: string, summary: string): void {
     const key = this.generateKey(title, content)
+
+    // 如果已存在，更新访问顺序并更新时间戳
+    if (this.cache.has(key)) {
+      this.updateAccessOrder(key)
+      const entry = this.cache.get(key)!
+      entry.summary = summary
+      entry.timestamp = Date.now()
+      entry.lastAccess = Date.now()
+      return
+    }
+
+    // 如果是新条目，先检查是否需要淘汰
+    this.evictIfNeeded()
+
     this.cache.set(key, {
       summary,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      lastAccess: Date.now()
     })
+
+    // 添加到访问顺序
+    this.accessOrder.push(key)
   }
 
   /**
@@ -84,6 +157,7 @@ export class AiSummaryCache {
     for (const [key, entry] of this.cache.entries()) {
       if (now - entry.timestamp > this.ttl) {
         this.cache.delete(key)
+        this.removeAccessOrder(key)
       }
     }
   }
@@ -93,6 +167,7 @@ export class AiSummaryCache {
    */
   clear(): void {
     this.cache.clear()
+    this.accessOrder = []
   }
 
   /**
@@ -112,10 +187,12 @@ let globalCache: AiSummaryCache | null = null
 /**
  * 初始化 AI 摘要缓存
  */
-export function initAiCache(ttl?: number): void {
+export function initAiCache(ttl?: number, maxSize?: number): void {
   if (!globalCache) {
-    globalCache = new AiSummaryCache(ttl)
-    debug({ debug: 'info' } as Config, 'AI 摘要缓存已初始化', 'AI-Cache', 'info')
+    // 使用配置中的 maxSize 或默认值 1000
+    const defaultMaxSize = 1000
+    globalCache = new AiSummaryCache(ttl, maxSize || defaultMaxSize)
+    debug({ debug: 'info' } as Config, `AI 摘要缓存已初始化 (TTL: ${ttl || 24*60*60*1000}ms, MaxSize: ${maxSize || defaultMaxSize})`, 'AI-Cache', 'info')
   }
 }
 
@@ -252,7 +329,7 @@ export async function getAiSummary(
 
   // 初始化缓存（如果还没初始化）
   if (!globalCache) {
-    initAiCache()
+    initAiCache(undefined, config.security?.maxCacheSize)
   }
 
   // 清洗内容

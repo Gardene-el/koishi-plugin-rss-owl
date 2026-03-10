@@ -6,16 +6,31 @@
  * npm install @sentry/node
  */
 
+import { normalizeError } from './error-handler'
+import { logger } from './logger'
+
 // 动态导入 Sentry，避免未安装时编译失败
 let Sentry: any = null
+let sentryDependencyWarningShown = false
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   Sentry = require('@sentry/node')
 } catch {
-  // Sentry 未安装，功能将被禁用
-  console.warn('Sentry not installed. Error tracking will be disabled.')
-  console.warn('To enable error tracking, install: npm install @sentry/node')
+  Sentry = null
+}
+
+function warnMissingSentryDependency(): void {
+  if (sentryDependencyWarningShown) return
+
+  sentryDependencyWarningShown = true
+  logger.warn('[error-tracker] Sentry not installed. Error tracking will be disabled.')
+  logger.warn('[error-tracker] To enable error tracking, install: npm install @sentry/node')
+}
+
+function logSentryInitError(error: unknown): void {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+  logger.error(`[error-tracker] Failed to initialize Sentry: ${errorMessage}`)
 }
 
 // 类型定义
@@ -61,7 +76,12 @@ export class ErrorTracker {
    * 初始化 Sentry
    */
   init(): void {
-    if (!this.config.enabled || !this.config.dsn || !Sentry) {
+    if (!this.config.enabled || !this.config.dsn) {
+      return
+    }
+
+    if (!Sentry) {
+      warnMissingSentryDependency()
       return
     }
 
@@ -94,7 +114,7 @@ export class ErrorTracker {
 
       this.initialized = true
     } catch (error) {
-      console.error('Failed to initialize Sentry:', error)
+      logSentryInitError(error)
     }
   }
 
@@ -230,7 +250,7 @@ let globalErrorTracker: ErrorTracker | null = null
  * 初始化全局错误追踪器
  */
 export function initErrorTracker(config: SentryConfig): ErrorTracker {
-  if (!globalErrorTracker) {
+  if (!globalErrorTracker || !globalErrorTracker.isInitialized()) {
     globalErrorTracker = new ErrorTracker(config)
     globalErrorTracker.init()
   }
@@ -391,14 +411,14 @@ export function withErrorTracking<T extends (...args: any[]) => any>(
       // 处理 Promise
       if (result instanceof Promise) {
         return result.catch((error) => {
-          trackError(error, context)
+          trackError(normalizeError(error, errorMessage || 'Unknown error'), context)
           throw error
         })
       }
 
       return result
     } catch (error) {
-      trackError(error as Error, context)
+      trackError(normalizeError(error, errorMessage || 'Unknown error'), context)
       throw error
     }
   }) as T

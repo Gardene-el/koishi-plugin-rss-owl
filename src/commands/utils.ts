@@ -5,7 +5,8 @@
 
 import { Context, Session } from 'koishi'
 import { Config } from '../types'
-import { getFriendlyErrorMessage } from '../utils/error-handler'
+import { getFriendlyErrorMessage, normalizeError } from '../utils/error-handler'
+import { trackError } from '../utils/error-tracker'
 import { debug } from '../utils/logger'
 
 /**
@@ -27,6 +28,11 @@ export interface SessionInfo {
   authority: number
 }
 
+export interface ParseTargetsResult {
+  targets: string[]
+  invalidTarget?: string
+}
+
 /**
  * 从会话中提取信息
  */
@@ -40,16 +46,35 @@ export function extractSessionInfo(session: Session): SessionInfo {
 }
 
 /**
+ * 构建命令日志上下文
+ */
+export function buildCommandLogContext(session: Session, command?: string, operation?: string): Record<string, any> {
+  const sessionInfo = extractSessionInfo(session)
+  const context: Record<string, any> = {
+    ...sessionInfo,
+    userId: sessionInfo.authorId,
+  }
+
+  if (command) context.command = command
+  if (operation) context.operation = operation
+
+  return context
+}
+
+/**
  * 命令错误处理包装器
  * 统一处理命令执行中的错误
  */
 export function withCommandErrorHandling(
   config: Config,
   operation: string,
-  handler: () => Promise<string>
+  handler: () => Promise<string>,
+  context?: Record<string, any>
 ): Promise<string> {
   return handler().catch((error) => {
-    debug(config, error, `${operation} error`, 'error')
+    const normalizedError = normalizeError(error)
+    debug(config, normalizedError, `${operation} error`, 'error', context)
+    trackError(normalizedError, context)
     return Promise.resolve(`${operation}失败: ${getFriendlyErrorMessage(error, operation)}`)
   })
 }
@@ -83,6 +108,31 @@ export function parseTarget(target: string): { platform: string; guildId: string
     platform: parts[0],
     guildId: parts[1]
   }
+}
+
+/**
+ * 解析多个推送目标
+ */
+export function parseTargets(targetInput?: string): ParseTargetsResult {
+  if (!targetInput) {
+    return { targets: [] }
+  }
+
+  const targets = targetInput
+    .split(/[;,，；]/)
+    .map(target => target.trim())
+    .filter(Boolean)
+
+  for (const target of targets) {
+    if (!parseTarget(target)) {
+      return {
+        targets: [],
+        invalidTarget: target,
+      }
+    }
+  }
+
+  return { targets }
 }
 
 /**

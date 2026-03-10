@@ -24,12 +24,11 @@ export const getCacheDir = (config: Config) => {
 export const writeCacheFile = async (fileUrl: string, config: Config): Promise<string> => {
   const cacheDir = getCacheDir(config)
   debug(config, cacheDir, 'cacheDir', 'details')
-  let fileList = fs.readdirSync(cacheDir)
-  let suffix = /(?<=^data:.+?\/).+?(?=;base64)/.exec(fileUrl)![0]
-  let fileName = `${parseInt((Math.random() * 10000000).toString()).toString()}.${suffix}`
-  while (fileList.find(i => i == fileName)) {
-    fileName = `${parseInt((Math.random() * 10000000).toString()).toString()}.${suffix}`
-  }
+  let suffix = /(?<=^data:.+?\/).+?(?=;base64)/.exec(fileUrl)?.[0] || 'bin'
+
+  // 使用时间戳 + 随机数生成唯一文件名，避免竞态条件
+  let fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 11)}.${suffix}`
+
   let base64Data = fileUrl.replace(/^data:.+?;base64,/, "");
   let filePath = `${cacheDir}/${fileName}`
   fs.writeFileSync(filePath, base64Data, 'base64')

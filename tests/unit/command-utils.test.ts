@@ -3,7 +3,23 @@
  */
 
 import { describe, it, expect } from '@jest/globals'
-import { checkAuthority, parseTarget, isValidUrl, extractSessionInfo } from '../../src/commands/utils'
+import { checkAuthority, parseTarget, parseTargets, isValidUrl, extractSessionInfo, buildCommandLogContext } from '../../src/commands/utils'
+
+function createMockSession(overrides: Record<string, any> = {}) {
+  return {
+    event: {
+      guild: { id: 'guild-123' },
+      user: { id: 'user-456' },
+      platform: 'onebot',
+      ...overrides.event,
+    },
+    user: {
+      authority: 4,
+      ...overrides.user,
+    },
+    ...overrides,
+  } as any
+}
 
 describe('命令工具函数', () => {
   describe('checkAuthority', () => {
@@ -63,6 +79,28 @@ describe('命令工具函数', () => {
     })
   })
 
+  describe('parseTargets', () => {
+    it('应该正确解析单个目标', () => {
+      const result = parseTargets('onebot:123456')
+      expect(result).toEqual({ targets: ['onebot:123456'] })
+    })
+
+    it('应该正确解析多个目标和多种分隔符', () => {
+      const result = parseTargets('onebot:123456, telegram:456789；discord:abc')
+      expect(result).toEqual({ targets: ['onebot:123456', 'telegram:456789', 'discord:abc'] })
+    })
+
+    it('应该在无输入时返回空数组', () => {
+      const result = parseTargets()
+      expect(result).toEqual({ targets: [] })
+    })
+
+    it('应该在目标格式错误时返回 invalidTarget', () => {
+      const result = parseTargets('onebot:123456, invalid-target')
+      expect(result).toEqual({ targets: [], invalidTarget: 'invalid-target' })
+    })
+  })
+
   describe('isValidUrl', () => {
     it('应该接受有效的 HTTP URL', () => {
       expect(isValidUrl('http://example.com')).toBe(true)
@@ -94,10 +132,38 @@ describe('命令工具函数', () => {
   })
 })
 
-describe('extractSessionInfo (需要模拟)', () => {
+describe('会话上下文工具', () => {
   it('应该从会话中提取基本信息', () => {
-    // 由于需要复杂的 mock，这里只做示例
-    // 实际测试需要模拟 Session 对象
-    expect(true).toBe(true) // 占位符
+    const session = createMockSession()
+    expect(extractSessionInfo(session)).toEqual({
+      guildId: 'guild-123',
+      platform: 'onebot',
+      authorId: 'user-456',
+      authority: 4,
+    })
+  })
+
+  it('应该构建命令日志上下文', () => {
+    const session = createMockSession()
+    expect(buildCommandLogContext(session, 'rsso.pull', 'pull')).toEqual({
+      guildId: 'guild-123',
+      platform: 'onebot',
+      authorId: 'user-456',
+      authority: 4,
+      userId: 'user-456',
+      command: 'rsso.pull',
+      operation: 'pull',
+    })
+  })
+
+  it('应该在未传入 command 和 operation 时保留基础上下文', () => {
+    const session = createMockSession()
+    expect(buildCommandLogContext(session)).toEqual({
+      guildId: 'guild-123',
+      platform: 'onebot',
+      authorId: 'user-456',
+      authority: 4,
+      userId: 'user-456',
+    })
   })
 })

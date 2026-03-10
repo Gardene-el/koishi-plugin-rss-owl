@@ -4,6 +4,50 @@ import { Config, rssArg } from '../types'
 import { debug } from '../utils/logger'
 import { getImageUrl } from '../utils/media'
 
+export interface RenderContentMetrics {
+  bodyScrollHeight: number
+  bodyOffsetHeight: number
+  documentScrollHeight: number
+  contentRangeHeight: number
+  maxElementBottom: number
+  paddingTop: number
+  paddingBottom: number
+  marginTop: number
+  marginBottom: number
+  marginLeft: number
+  bodyWidth: number
+  viewportHeight: number
+}
+
+export function calculateContentHeight(metrics: RenderContentMetrics): number {
+  const intrinsicHeight = Math.ceil(
+    Math.max(metrics.contentRangeHeight, metrics.maxElementBottom, 0)
+    + metrics.paddingTop
+    + metrics.paddingBottom
+    + metrics.marginTop
+    + metrics.marginBottom
+  )
+  const domMeasuredHeight = Math.max(
+    metrics.bodyScrollHeight,
+    metrics.bodyOffsetHeight,
+    metrics.documentScrollHeight,
+    0
+  )
+
+  if (intrinsicHeight > 0) {
+    if (domMeasuredHeight > intrinsicHeight && domMeasuredHeight - intrinsicHeight <= 64) {
+      return Math.max(domMeasuredHeight, 100)
+    }
+    return Math.max(intrinsicHeight, 100)
+  }
+
+  if (metrics.viewportHeight > 0 && domMeasuredHeight >= metrics.viewportHeight) {
+    return 100
+  }
+
+  return Math.max(domMeasuredHeight, 100)
+}
+
 // 预处理 HTML：下载所有图片并替换为 data URL，避免 Puppeteer 截图时加载外部图片超时
 export async function preprocessHtmlImages(
   ctx: Context,
@@ -108,23 +152,25 @@ export async function renderHtml2Image(
   let page = await ctx.puppeteer.page()
   try {
     debug(config, htmlContent, 'htmlContent', 'details')
+    const initialViewportHeight = 2000
 
     // 预处理：下载所有图片并替换为 data URL，避免加载外部图片超时
     htmlContent = await preprocessHtmlImages(ctx, config, $http, htmlContent, arg)
 
     // 设置 deviceScaleFactor 以控制截图清晰度（必须在 setContent 之前）
     // 保持 viewport 宽度与 bodyWidth 匹配，避免排版错乱
-    const bodyWidth = config.template.bodyWidth || 600
-    const bodyPadding = config.template.bodyPadding || 20
+    // 优先使用 arg 参数，其次使用全局配置
+    const bodyWidth = arg?.bodyWidth ?? config.template.bodyWidth ?? 600
+    const bodyPadding = arg?.bodyPadding ?? config.template.bodyPadding ?? 20
     const viewportWidth = bodyWidth + bodyPadding * 2 + 100  // 预留额外空间
 
     // 先用较大的初始 viewport 加载页面（高度设大一些确保内容能完整渲染）
     await page.setViewport({
       width: viewportWidth,
-      height: 10000,
+      height: initialViewportHeight,
       deviceScaleFactor: config.template.deviceScaleFactor
     })
-    debug(config, `设置截图清晰度: ${config.template.deviceScaleFactor}x, 初始 viewport: ${viewportWidth}x10000`, 'deviceScaleFactor', 'info')
+    debug(config, `设置截图清晰度: ${config.template.deviceScaleFactor}x, 初始 viewport: ${viewportWidth}x${initialViewportHeight}`, 'deviceScaleFactor', 'info')
 
     // 拦截视频请求，避免加载视频导致超时
     await page.setRequestInterception(true)
@@ -143,30 +189,76 @@ export async function renderHtml2Image(
     // 等待一小段时间让 CSS 和内容完全渲染
     await new Promise(resolve => setTimeout(resolve, 500))
 
-    // 获取实际内容高度，根据内容高度动态调整 viewport
-    // 使用 try-catch 防止获取失败
-    let actualHeight = 100
+    // 获取实际内容尺寸，根据渲染内容边界动态调整 viewport
+    let contentMetrics: RenderContentMetrics = {
+      bodyScrollHeight: 0,
+      bodyOffsetHeight: 0,
+      documentScrollHeight: 0,
+      contentRangeHeight: 0,
+      maxElementBottom: 0,
+      paddingTop: 0,
+      paddingBottom: 0,
+      marginTop: 0,
+      marginBottom: 0,
+      marginLeft: 0,
+      bodyWidth: 0,
+      viewportHeight: initialViewportHeight,
+    }
     try {
-      actualHeight = await page.evaluate(() => {
-        // 先触发一次 layout，获取准确的内容高度
-        return Math.max(
-          document.body?.offsetHeight || 0,
-          document.documentElement?.scrollHeight || 0,
-          document.body?.scrollHeight || 0
-        )
+      contentMetrics = await page.evaluate(() => {
+        const body = document.body
+        const documentElement = document.documentElement
+        if (!body || !documentElement) {
+          return {
+            bodyScrollHeight: 0,
+            bodyOffsetHeight: 0,
+            documentScrollHeight: 0,
+            contentRangeHeight: 0,
+            maxElementBottom: 0,
+            paddingTop: 0,
+            paddingBottom: 0,
+            marginTop: 0,
+            marginBottom: 0,
+            marginLeft: 0,
+            bodyWidth: 0,
+            viewportHeight: window.innerHeight || 0,
+          }
+        }
+
+        const computedStyle = document.defaultView?.getComputedStyle(body)
+        const bodyRect = body.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(body)
+        const rangeRect = range.getBoundingClientRect()
+        const maxElementBottom = Array.from(body.querySelectorAll('*')).reduce((max, element) => {
+          const rect = element.getBoundingClientRect()
+          return Math.max(max, rect.bottom - bodyRect.top)
+        }, 0)
+
+        return {
+          bodyScrollHeight: body.scrollHeight || 0,
+          bodyOffsetHeight: body.offsetHeight || 0,
+          documentScrollHeight: documentElement.scrollHeight || 0,
+          contentRangeHeight: Math.ceil(rangeRect.height || 0),
+          maxElementBottom: Math.ceil(maxElementBottom),
+          paddingTop: parseFloat(computedStyle?.paddingTop || '0') || 0,
+          paddingBottom: parseFloat(computedStyle?.paddingBottom || '0') || 0,
+          marginTop: parseFloat(computedStyle?.marginTop || '0') || 0,
+          marginBottom: parseFloat(computedStyle?.marginBottom || '0') || 0,
+          marginLeft: parseFloat(computedStyle?.marginLeft || '0') || 0,
+          bodyWidth: Math.ceil(body.offsetWidth || bodyRect.width || 0),
+          viewportHeight: window.innerHeight || 0,
+        }
       })
     } catch (e) {
-      debug(config, `获取内容高度失败: ${e}`, 'height error', 'error')
+      debug(config, `获取内容尺寸失败: ${e}`, 'height error', 'error')
     }
 
-    // 如果高度异常（接近初始 viewport 高度），使用保守估算
-    if (actualHeight >= 9000) {
-      debug(config, `内容高度异常 (${actualHeight})，使用保守估算`, 'height error', 'info')
-      actualHeight = 100
-    }
-
-    // 设置最小高度为 100，避免空内容时截图失败
+    const actualHeight = calculateContentHeight(contentMetrics)
     const viewportHeight = Math.max(actualHeight, 100)
+    const clipWidth = Math.max(contentMetrics.bodyWidth || bodyWidth, 1)
+    const clipX = Math.max(Math.floor(contentMetrics.marginLeft), 0)
+    const clipY = Math.max(Math.floor(contentMetrics.marginTop), 0)
 
     await page.setViewport({
       width: viewportWidth,
@@ -194,12 +286,10 @@ export async function renderHtml2Image(
       return h.image(image, 'image/png')
     }
 
-    let [height, width, x, y] = await page.evaluate(() => [
-      document.body?.offsetHeight || 0,
-      document.body.offsetWidth,
-      parseInt(document.defaultView?.getComputedStyle(document.body)?.marginLeft) || 0,
-      parseInt(document.defaultView?.getComputedStyle(document.body)?.marginTop) || 0
-    ])
+    let height = actualHeight
+    let width = clipWidth
+    let x = clipX
+    let y = clipY
 
     // 保守处理：如果高度异常，使用更小的值
     if (height > 5000) {

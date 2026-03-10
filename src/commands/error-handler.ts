@@ -3,11 +3,10 @@
  * 提供统一的错误处理和用户友好的错误消息
  */
 
-import { Context, Session, Logger } from 'koishi'
+import { Context, Session } from 'koishi'
 import { Config } from '../types'
 import { getFriendlyErrorMessage } from '../utils/error-handler'
-
-const logger = new Logger('rss-owl-command')
+import { debugError } from '../utils/logger'
 
 /**
  * 命令执行结果
@@ -73,9 +72,7 @@ export async function executeCommand(
  * 记录命令错误
  */
 function logError(config: Config, operation: string, error: any) {
-  if (config.debug === 'details' || config.debug === 'error') {
-    logger.error(`[${operation}]`, error)
-  }
+  debugError(config, error, operation)
 }
 
 /**

@@ -1,6 +1,8 @@
 import { Context, clone } from 'koishi'
 import { Config, rssArg } from '../types'
-import { debug } from '../utils/logger'
+import { normalizeError } from '../utils/error-handler'
+import { trackError } from '../utils/error-tracker'
+import { createDebugWithContext, debug } from '../utils/logger'
 import { parsePubDate, parseQuickUrl } from '../utils/common'
 import { getRssData } from './parser'
 import { RssItemProcessor } from './item-processor'
@@ -17,6 +19,21 @@ export interface FeederDependencies {
 let interval: any = null
 let queueInterval: any = null
 
+function buildFeedLogContext(rssItem: any): Record<string, any> {
+  return {
+    subscribeId: String(rssItem.id),
+    rssId: rssItem.rssId || rssItem.title,
+    rssTitle: rssItem.title,
+    url: rssItem.url,
+    guildId: rssItem.guildId,
+    platform: rssItem.platform,
+  }
+}
+
+function createFeedDebug(config: Config, rssItem: any) {
+  return createDebugWithContext(config, buildFeedLogContext(rssItem))
+}
+
 export function findRssItem(rssList: any[], keyword: number | string) {
   // 优先匹配列表索引（用户看到的序号 1, 2, 3...）
   if (typeof keyword === 'number' || /^\d+$/.test(String(keyword))) {
@@ -27,10 +44,15 @@ export function findRssItem(rssList: any[], keyword: number | string) {
   }
 
   // 其他匹配方式：按 rssId、url、title 等
-  let index = ((rssList.findIndex(i => i.rssId === +keyword) + 1) ||
+  const index = ((rssList.findIndex(i => i.rssId === +keyword) + 1) ||
     (rssList.findIndex(i => i.url == keyword) + 1) ||
     (rssList.findIndex(i => i.url.indexOf(keyword) + 1) + 1) ||
     (rssList.findIndex(i => i.title.indexOf(keyword) + 1) + 1)) - 1
+
+  // 边界检查：确保索引有效
+  if (index < 0 || index >= rssList.length) {
+    return undefined
+  }
   return rssList[index]
 }
 
@@ -42,6 +64,13 @@ export function getLastContent(item: any, config: Config) {
 
 export function formatArg(options: any, config: Config): rssArg {
   let { arg, template, auth } = options
+
+  const parseArrayArg = (value: string): string[] => {
+    return value
+      .split('/')
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
 
   // 特殊处理：提取完整的 proxyAgent URL
   let proxyAgentUrl: string | undefined
@@ -71,8 +100,8 @@ export function formatArg(options: any, config: Config): rssArg {
   if (json.forceLength) json.forceLength = parseInt(json.forceLength)
 
   // Array conversions
-  if (json.filter && typeof json.filter === 'string') json.filter = json.filter.split("/")
-  if (json.block && typeof json.block === 'string') json.block = json.block.split("/")
+  if (json.filter && typeof json.filter === 'string') json.filter = parseArrayArg(json.filter)
+  if (json.block && typeof json.block === 'string') json.block = parseArrayArg(json.block)
 
   // Proxy Argument Parsing (使用提取的完整 URL)
   if (proxyAgentUrl) {
@@ -188,6 +217,193 @@ export function mixinArg(arg: any, config: Config): rssArg {
   return res;
 }
 
+// ============ 拆分出的辅助函数 ============
+
+/**
+ * 1. 抓取 RSS 数据
+ */
+async function fetchRssItems(
+  ctx: Context,
+  config: Config,
+  $http: any,
+  rssItem: any,
+  arg: rssArg,
+  feedDebug: ReturnType<typeof createDebugWithContext>
+): Promise<any[]> {
+  const rssHubUrl = config.msg?.rssHubUrl || 'https://hub.slarker.me'
+
+  try {
+    const urls = rssItem.url.split("|").map((u: string) => parseQuickUrl(u, rssHubUrl, quickList))
+    const fetchPromises = urls.map((url: string) => getRssData(ctx, config, $http, url, arg))
+    const results = await Promise.all(fetchPromises)
+    return results.flat(1)
+  } catch (err: any) {
+    const normalizedError = normalizeError(err)
+    feedDebug(`Fetch failed for ${rssItem.title}: ${normalizedError.message}`, 'feeder', 'error', {
+      stage: 'fetch',
+    })
+    trackError(normalizedError, {
+      ...buildFeedLogContext(rssItem),
+      stage: 'fetch',
+    })
+    return []
+  }
+}
+
+/**
+ * 2. 过滤关键字
+ */
+function filterItems(config: Config, items: any[], arg: rssArg, feedDebug: ReturnType<typeof createDebugWithContext>): any[] {
+  return items.filter(item => {
+    const matchKeyword = arg.filter?.find((keyword: string) =>
+      new RegExp(keyword, 'im').test(item.title) || new RegExp(keyword, 'im').test(item.description)
+    )
+    if (matchKeyword) {
+      feedDebug(`filter:${matchKeyword}`, 'feeder', 'info', { matchedKeyword: matchKeyword })
+      feedDebug(item, 'filter rss item', 'info', { matchedKeyword: matchKeyword })
+    }
+    return !matchKeyword
+  })
+}
+
+/**
+ * 3. 检查更新（时间+内容）
+ */
+function checkForUpdates(
+  config: Config,
+  rssItem: any,
+  items: any[],
+  arg: rssArg,
+  feedDebug: ReturnType<typeof createDebugWithContext>
+): { newItems: any[]; latestPubDate: Date; currentContent: any[] } {
+  // 按时间排序
+  let itemArray = items
+    .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())
+
+  if (itemArray.length === 0) {
+    return { newItems: [], latestPubDate: new Date(), currentContent: [] }
+  }
+
+  const latestItem = itemArray[0]
+  const lastPubDate = parsePubDate(config, latestItem.pubDate)
+
+  feedDebug(`${rssItem.title}: Latest item date=${lastPubDate.toISOString()}, DB date=${rssItem.lastPubDate ? new Date(rssItem.lastPubDate).toISOString() : 'none'}`, 'feeder', 'details')
+
+  // 准备去重内容
+  const currentContent = config.basic?.resendUpdataContent === 'all'
+    ? itemArray.map((i: any) => getLastContent(i, config))
+    : [getLastContent(latestItem, config)]
+
+  // 反转顺序（发送顺序：最早的先发）
+  if (arg.reverse) {
+    itemArray = itemArray.reverse()
+  }
+
+  let rssItemArray: any[] = []
+
+  if (rssItem.arg.forceLength) {
+    // 强制长度模式：忽略时间，只取 N 条
+    rssItemArray = itemArray.slice(0, rssItem.arg.forceLength)
+    feedDebug(`${rssItem.title}: Force length mode, taking ${rssItemArray.length} items`, 'feeder', 'details')
+  } else {
+    // 标准模式：时间 + 内容检查
+    feedDebug(`${rssItem.title}: Checking ${itemArray.length} items for updates`, 'feeder', 'details')
+    rssItemArray = itemArray.filter((v, i) => {
+      const currentItemTime = parsePubDate(config, v.pubDate).getTime()
+      const lastTime = rssItem.lastPubDate ? parsePubDate(config, rssItem.lastPubDate).getTime() : 0
+
+      feedDebug(`[${i}] ${v.title?.substring(0, 30)}: time=${new Date(currentItemTime).toISOString()} > last=${new Date(lastTime).toISOString()} ? ${currentItemTime > lastTime}`, 'feeder', 'details')
+
+      // 严格时间检查
+      if (currentItemTime > lastTime) {
+        feedDebug(`[${i}] ✓ Item is new (time check)`, 'feeder', 'details')
+        return true
+      }
+
+      // 内容哈希检查（时间相同但内容变化）
+      if (config.basic?.resendUpdataContent !== 'disable') {
+        const newItemContent = getLastContent(v, config)
+        const oldItemMatch = rssItem.lastContent?.itemArray?.find((old: any) =>
+          (newItemContent.guid && old.guid === newItemContent.guid) ||
+          (old.link === newItemContent.link && old.title === newItemContent.title)
+        )
+
+        if (oldItemMatch) {
+          const descriptionChanged = JSON.stringify(oldItemMatch.description) !== JSON.stringify(newItemContent.description)
+          if (descriptionChanged) {
+            feedDebug(`[${i}] ✓ Item is updated (content changed)`, 'feeder', 'details')
+          } else {
+            feedDebug(`[${i}] ✗ Item filtered (already sent)`, 'feeder', 'details')
+          }
+          return descriptionChanged
+        } else {
+          feedDebug(`[${i}] ✗ Item filtered (no match in lastContent)`, 'feeder', 'details')
+        }
+      }
+      feedDebug(`[${i}] ✗ Item filtered (failed all checks)`, 'feeder', 'details')
+      return false
+    })
+
+    // 应用最大条目限制
+    if (arg.maxRssItem) {
+      rssItemArray = rssItemArray.slice(0, arg.maxRssItem)
+    }
+  }
+
+  return { newItems: rssItemArray, latestPubDate: lastPubDate, currentContent }
+}
+
+/**
+ * 4. 生成消息
+ */
+async function generateMessages(
+  processor: RssItemProcessor,
+  items: any[],
+  rssItem: any,
+  arg: rssArg
+): Promise<{ messageList: string[]; itemsToSend: any[] }> {
+  const itemsToSend = [...items].reverse()
+
+  // 生成所有消息
+  const messageList = (await Promise.all(
+    itemsToSend.map(async i => await processor.parseRssItem(i, { ...rssItem, ...arg }, rssItem.author))
+  )).filter(m => m)
+
+  return { messageList, itemsToSend }
+}
+
+/**
+ * 5. 构建最终消息
+ */
+function buildFinalMessage(
+  config: Config,
+  messageList: string[],
+  rssItem: any,
+  arg: rssArg
+): string {
+  let message = ""
+  const shouldMerge = arg.merge === true || config.basic?.merge === '一直合并' || (config.basic?.merge === '有多条更新时合并' && messageList.length > 1)
+
+  // 检查是否需要合并视频
+  const hasVideo = config.basic?.margeVideo && messageList.some(msg => /<video/.test(msg))
+
+  if (shouldMerge || hasVideo) {
+    message = `<message forward><author id="${rssItem.author}"/>${messageList.map(m => `<message>${m}</message>`).join("")}</message>`
+  } else {
+    message = messageList.join("")
+  }
+
+  // 添加提及
+  if (rssItem.followers && rssItem.followers.length > 0) {
+    const mentions = rssItem.followers.map((id: string) => `<at ${id === 'all' ? 'type="all"' : `id="${id}"`}/>`).join(" ")
+    message += `<message>${mentions}</message>`
+  }
+
+  return message
+}
+
+// ============ 主函数 ============
+
 /**
  * 生产者：抓取 RSS，发现新消息，存入队列
  */
@@ -200,9 +416,11 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
 
   for (const rssItem of rssList) {
     try {
+      const feedDebug = createFeedDebug(config, rssItem)
+
       // 1. Prepare Arguments
       let arg: rssArg = mixinArg(rssItem.arg || {}, config)
-      debug(config, `[DEBUG_PROXY] feeder mixinArg result proxyAgent: ${JSON.stringify(arg.proxyAgent)}`, 'feeder', 'details')
+      feedDebug(`[DEBUG_PROXY] feeder mixinArg result proxyAgent: ${JSON.stringify(arg.proxyAgent)}`, 'feeder', 'details')
       let originalArg = clone(rssItem.arg || {})
 
       // 2. Interval Check
@@ -220,156 +438,61 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
       }
 
       // 3. Fetch RSS Data
-      // Use config.msg.rssHubUrl for quick url parsing
-      const rssHubUrl = config.msg?.rssHubUrl || 'https://hub.slarker.me'
-
-      let rssItemList = []
-      try {
-        const urls = rssItem.url.split("|").map((u: string) => parseQuickUrl(u, rssHubUrl, quickList))
-        const fetchPromises = urls.map((url: string) => getRssData(ctx, config, $http, url, arg))
-        const results = await Promise.all(fetchPromises)
-        rssItemList = results.flat(1)
-      } catch (err: any) {
-        debug(config, `Fetch failed for ${rssItem.title}: ${err.message}`, 'feeder', 'info')
+      const rssItemList = await fetchRssItems(ctx, config, $http, rssItem, arg, feedDebug)
+      if (rssItemList.length === 0) {
+        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, {
+          lastPubDate: rssItem.lastPubDate,
+          arg: originalArg,
+          lastContent: rssItem.lastContent || { itemArray: [] }
+        })
         continue
       }
 
-      if (rssItemList.length === 0) continue
+      // 4. Filter Items
+      const filteredItems = filterItems(config, rssItemList, arg, feedDebug)
+      if (filteredItems.length === 0) {
+        const latestItem = [...rssItemList]
+          .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())[0]
 
-      // 4. Sort and Filter
-      let itemArray = rssItemList
-        .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())
-        .filter(item => {
-          // Keyword filter
-          const matchKeyword = arg.filter?.find((keyword: string) =>
-            new RegExp(keyword, 'im').test(item.title) || new RegExp(keyword, 'im').test(item.description)
-          )
-          if (matchKeyword) {
-            debug(config, `filter:${matchKeyword}`, '', 'info')
-            debug(config, item, 'filter rss item', 'info')
-          }
-          return !matchKeyword
+        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, {
+          lastPubDate: latestItem ? parsePubDate(config, latestItem.pubDate) : rssItem.lastPubDate,
+          arg: originalArg,
+          lastContent: latestItem
+            ? { itemArray: [getLastContent(latestItem, config)] }
+            : (rssItem.lastContent || { itemArray: [] })
         })
-
-      if (itemArray.length === 0) continue
+        continue
+      }
 
       // 5. Check for Updates
-      const latestItem = itemArray[0]
-      const lastPubDate = parsePubDate(config, latestItem.pubDate)
+      const { newItems, latestPubDate, currentContent } = checkForUpdates(config, rssItem, filteredItems, arg, feedDebug)
 
-      debug(config, `${rssItem.title}: Latest item date=${lastPubDate.toISOString()}, DB date=${rssItem.lastPubDate ? new Date(rssItem.lastPubDate).toISOString() : 'none'}`, 'feeder', 'details')
-
-      // Prepare content for deduplication
-      const currentContent = config.basic?.resendUpdataContent === 'all'
-        ? itemArray.map((i: any) => getLastContent(i, config))
-        : [getLastContent(latestItem, config)]
-
-      // Reverse if needed for sending order (oldest first usually)
-      if (arg.reverse) {
-        itemArray = itemArray.reverse()
-      }
-
-      let rssItemArray = []
-
-      if (rssItem.arg.forceLength) {
-        // Force length mode: ignore time, just take N items
-        rssItemArray = itemArray.slice(0, arg.forceLength)
-        debug(config, `${rssItem.title}: Force length mode, taking ${rssItemArray.length} items`, 'feeder', 'details')
-      } else {
-        // Standard mode: Time & Content check
-        debug(config, `${rssItem.title}: Checking ${itemArray.length} items for updates`, 'feeder', 'details')
-        rssItemArray = itemArray.filter((v, i) => {
-          const currentItemTime = parsePubDate(config, v.pubDate).getTime()
-          const lastTime = rssItem.lastPubDate ? parsePubDate(config, rssItem.lastPubDate).getTime() : 0
-
-          debug(config, `[${i}] ${v.title?.substring(0, 30)}: time=${new Date(currentItemTime).toISOString()} > last=${new Date(lastTime).toISOString()} ? ${currentItemTime > lastTime}`, 'feeder', 'details')
-
-          // Strict time check
-          if (currentItemTime > lastTime) {
-            debug(config, `[${i}] ✓ Item is new (time check)`, 'feeder', 'details')
-            return true
-          }
-
-          // Content hash check (if time is same but content changed)
-          if (config.basic?.resendUpdataContent !== 'disable') {
-            const newItemContent = getLastContent(v, config)
-            const oldItemMatch = rssItem.lastContent?.itemArray?.find((old: any) =>
-              (newItemContent.guid && old.guid === newItemContent.guid) ||
-              (old.link === newItemContent.link && old.title === newItemContent.title)
-            )
-
-            if (oldItemMatch) {
-              // If description changed, it's an update
-              const descriptionChanged = JSON.stringify(oldItemMatch.description) !== JSON.stringify(newItemContent.description)
-              if (descriptionChanged) {
-                debug(config, `[${i}] ✓ Item is updated (content changed)`, 'feeder', 'details')
-              } else {
-                debug(config, `[${i}] ✗ Item filtered (already sent)`, 'feeder', 'details')
-              }
-              return descriptionChanged
-            } else {
-              debug(config, `[${i}] ✗ Item filtered (no match in lastContent)`, 'feeder', 'details')
-            }
-          }
-          debug(config, `[${i}] ✗ Item filtered (failed all checks)`, 'feeder', 'details')
-          return false
-        })
-
-        // Apply Max Item Limit
-        if (arg.maxRssItem) {
-          rssItemArray = rssItemArray.slice(0, arg.maxRssItem)
-        }
-      }
-
-      if (rssItemArray.length === 0) {
-        debug(config, `${rssItem.title}: No new items found after filtering`, 'feeder', 'info')
-        // No new items, but we should still update 'lastContent' to latest state to prevent future drifts
+      if (newItems.length === 0) {
+        feedDebug(`${rssItem.title}: No new items found after filtering`, 'feeder', 'info', { newItemCount: 0 })
         await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, {
-          lastPubDate,
+          lastPubDate: latestPubDate,
           arg: originalArg,
           lastContent: { itemArray: currentContent }
         })
         continue
       }
 
-      debug(config, `${rssItem.title}: Found ${rssItemArray.length} new items`, 'feeder', 'info')
-      debug(config, rssItemArray.map(i => i.title), '', 'info')
+      feedDebug(`${rssItem.title}: Found ${newItems.length} new items`, 'feeder', 'info', { newItemCount: newItems.length })
+      feedDebug(newItems.map(i => i.title), 'feeder', 'info', { newItemCount: newItems.length })
 
-      // 6. 生成消息并添加到队列（生产者核心逻辑）
-      const itemsToSend = [...rssItemArray].reverse()
-
-      // 生成所有消息
-      const messageList = (await Promise.all(
-        itemsToSend.map(async i => await processor.parseRssItem(i, { ...rssItem, ...arg }, rssItem.author))
-      )).filter(m => m) // Filter empty messages
+      // 6. Generate Messages
+      const { messageList, itemsToSend } = await generateMessages(processor, newItems, rssItem, arg)
 
       if (messageList.length === 0) {
-        debug(config, `${rssItem.title}: Items found but parsed to empty messages`, 'feeder', 'info')
-        // Items found but parsed to empty (e.g. filtered by video mode)
-        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { lastPubDate, arg: originalArg, lastContent: { itemArray: currentContent } })
+        feedDebug(`${rssItem.title}: Items found but parsed to empty messages`, 'feeder', 'info', { newItemCount: newItems.length })
+        await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, { lastPubDate: latestPubDate, arg: originalArg, lastContent: { itemArray: currentContent } })
         continue
       }
 
-      // 7. 构建最终消息
-      let message = ""
-      const shouldMerge = arg.merge === true || config.basic?.merge === '一直合并' || (config.basic?.merge === '有多条更新时合并' && messageList.length > 1)
+      // 7. Build Final Message
+      const message = buildFinalMessage(config, messageList, rssItem, arg)
 
-      // Check for video merge requirement
-      const hasVideo = config.basic?.margeVideo && messageList.some(msg => /<video/.test(msg))
-
-      if (shouldMerge || hasVideo) {
-        message = `<message forward><author id="${rssItem.author}"/>${messageList.map(m => `<message>${m}</message>`).join("")}</message>`
-      } else {
-        message = messageList.join("")
-      }
-
-      // Add mentions
-      if (rssItem.followers && rssItem.followers.length > 0) {
-        const mentions = rssItem.followers.map((id: string) => `<at ${id === 'all' ? 'type="all"' : `id="${id}"`}/>`).join(" ")
-        message += `<message>${mentions}</message>`
-      }
-
-      // 8. 添加任务到队列（关键变更：不再直接发送）
+      // 8. Add to Queue
       const taskContent: QueueTaskContent = {
         message,
         originalItem: itemsToSend[0],
@@ -390,27 +513,42 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
         content: taskContent
       })
 
-      debug(config, `✓ 已添加到发送队列: ${rssItem.title}`, 'feeder', 'info')
+      feedDebug(`✓ 已添加到发送队列: ${rssItem.title}`, 'feeder', 'info', {
+        queuedItemTitle: itemsToSend[0]?.title,
+      })
 
-      // 9. 更新数据库状态（关键：无论发送是否成功，都更新 lastPubDate）
-      // 这样即使 Bot 掉线，重启后也不会重复发送旧消息
+      // 9. Update Database State
       await ctx.database.set(('rssOwl' as any), { id: rssItem.id }, {
-        lastPubDate,
+        lastPubDate: latestPubDate,
         arg: originalArg,
         lastContent: { itemArray: currentContent }
       })
 
     } catch (err: any) {
-      debug(config, `Feeder error for ${rssItem.url}: ${err.message}`, 'feeder', 'error')
+      const normalizedError = normalizeError(err)
+      const feedContext = buildFeedLogContext(rssItem)
+
+      debug(config, `Feeder error for ${rssItem.url}: ${normalizedError.message}`, 'feeder', 'error', feedContext)
+      trackError(normalizedError, feedContext)
     }
   }
 }
 
 export function startFeeder(ctx: Context, config: Config, $http: any, processor: RssItemProcessor, queueManager: NotificationQueueManager) {
   const deps = { ctx, config, $http, queueManager }
+  const lifecycleDebug = createDebugWithContext(config, { lifecycle: 'feeder' })
 
   // Initial run
-  feeder(deps, processor).catch(err => console.error("Initial feeder run failed:", err))
+  feeder(deps, processor).catch(err => {
+    const normalizedError = normalizeError(err)
+    lifecycleDebug(`Initial feeder run failed: ${normalizedError.message}`, 'feeder', 'error', {
+      operation: 'initial-feeder-run',
+    })
+    trackError(normalizedError, {
+      lifecycle: 'feeder',
+      operation: 'initial-feeder-run',
+    })
+  })
 
   // 启动生产者定时器（抓取 RSS）
   const refreshInterval = (config.basic?.refresh || 600) * 1000
@@ -430,10 +568,24 @@ export function startFeeder(ctx: Context, config: Config, $http: any, processor:
   }, queueProcessInterval)
 
   // 立即处理一次队列（启动时）
-  queueManager.processQueue().catch(err => console.error("Initial queue processing failed:", err))
+  queueManager.processQueue().catch(err => {
+    const normalizedError = normalizeError(err)
+    lifecycleDebug(`Initial queue processing failed: ${normalizedError.message}`, 'queue', 'error', {
+      operation: 'initial-queue-processing',
+    })
+    trackError(normalizedError, {
+      lifecycle: 'feeder',
+      operation: 'initial-queue-processing',
+    })
+  })
+
+  lifecycleDebug('Feeder started', 'feeder', 'info', {
+    refreshInterval,
+    queueProcessInterval,
+  })
 }
 
-export function stopFeeder() {
+export function stopFeeder(config?: Config) {
   if (interval) {
     clearInterval(interval)
     interval = null
@@ -441,5 +593,10 @@ export function stopFeeder() {
   if (queueInterval) {
     clearInterval(queueInterval)
     queueInterval = null
+  }
+
+  if (config) {
+    const lifecycleDebug = createDebugWithContext(config, { lifecycle: 'feeder' })
+    lifecycleDebug('Feeder stopped', 'feeder', 'info')
   }
 }

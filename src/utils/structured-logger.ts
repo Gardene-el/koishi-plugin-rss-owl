@@ -3,10 +3,8 @@
  * 提供统一的日志格式，支持 JSON 输出和性能监控
  */
 
-import { Logger } from 'koishi'
-import { Config, debugLevel } from '../types'
-
-const logger = new Logger('rss-owl')
+import { Config } from '../types'
+import { debug as coreDebug, shouldLog as shouldCoreLog } from './logger'
 
 /**
  * 日志级别枚举
@@ -99,10 +97,7 @@ export class StructuredLogger {
    * 判断是否应该记录日志
    */
   private shouldLog(level: LogLevel): boolean {
-    const typeLevel = debugLevel.findIndex(i => i === level)
-    if (typeLevel < 1) return false
-    const configLevel = debugLevel.findIndex(i => i === this.config.debug)
-    return typeLevel <= configLevel
+    return shouldCoreLog(this.config, level)
   }
 
   /**
@@ -160,19 +155,7 @@ export class StructuredLogger {
     }
 
     const formattedMessage = this.formatEntry(entry)
-
-    // 根据级别选择输出方式
-    switch (entry.level) {
-      case LogLevel.ERROR:
-        logger.error(formattedMessage)
-        break
-      case LogLevel.INFO:
-      case LogLevel.DETAILS:
-        logger.info(formattedMessage)
-        break
-      case LogLevel.DISABLE:
-        break
-    }
+    coreDebug(this.config, formattedMessage, '', entry.level)
   }
 
   /**

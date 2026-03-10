@@ -2,15 +2,18 @@
  * 命令错误处理测试
  */
 
-import { describe, it, expect } from '@jest/globals'
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
 import {
   CommandError,
   CommandErrorType,
+  executeCommand,
   permissionDenied,
   invalidArgument,
   notFound,
   alreadyExists
 } from '../../src/commands/error-handler'
+import * as loggerModule from '../../src/utils/logger'
+import { Config } from '../../src/types'
 
 describe('CommandError', () => {
   it('应该创建权限错误', () => {
@@ -86,6 +89,53 @@ describe('错误类型验证', () => {
     expect(CommandErrorType.ALREADY_EXISTS).toBe('ALREADY_EXISTS')
     expect(CommandErrorType.NETWORK_ERROR).toBe('NETWORK_ERROR')
     expect(CommandErrorType.INTERNAL_ERROR).toBe('INTERNAL_ERROR')
+  })
+})
+
+describe('executeCommand', () => {
+  let config: Config
+  let debugErrorSpy: jest.SpiedFunction<typeof loggerModule.debugError>
+
+  beforeEach(() => {
+    config = {
+      debug: 'error',
+      logging: {},
+    } as any
+
+    debugErrorSpy = jest.spyOn(loggerModule, 'debugError').mockImplementation(() => undefined as any)
+  })
+
+  afterEach(() => {
+    debugErrorSpy.mockRestore()
+  })
+
+  it('应该返回成功结果', async () => {
+    const result = await executeCommand({} as any, config, '测试操作', async () => 'ok')
+
+    expect(result).toBe('ok')
+    expect(debugErrorSpy).not.toHaveBeenCalled()
+  })
+
+  it('应该格式化 CommandError 并记录日志', async () => {
+    const error = invalidArgument('URL 不能为空')
+
+    const result = await executeCommand({} as any, config, '测试操作', async () => {
+      throw error
+    })
+
+    expect(result).toBe('参数错误: URL 不能为空')
+    expect(debugErrorSpy).toHaveBeenCalledWith(config, error, '测试操作')
+  })
+
+  it('应该返回友好错误消息并记录普通异常', async () => {
+    const error = new Error('boom')
+
+    const result = await executeCommand({} as any, config, '测试操作', async () => {
+      throw error
+    })
+
+    expect(result).toContain('测试操作失败:')
+    expect(debugErrorSpy).toHaveBeenCalledWith(config, error, '测试操作')
   })
 })
 

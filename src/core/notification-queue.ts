@@ -5,7 +5,9 @@
 
 import { Context } from 'koishi'
 import { Config } from '../types'
-import { debug } from '../utils/logger'
+import { normalizeError } from '../utils/error-handler'
+import { trackError } from '../utils/error-tracker'
+import { createDebugWithContext, debug } from '../utils/logger'
 
 // 队列任务状态
 export type QueueStatus = 'PENDING' | 'RETRY' | 'FAILED' | 'SUCCESS'
@@ -61,6 +63,31 @@ export class NotificationQueueManager {
     this.config = config
   }
 
+  private buildTaskLogContext(task: Partial<QueueTask>): Record<string, any> {
+    const context: Record<string, any> = {
+      subscribeId: task.subscribeId,
+      rssId: task.rssId,
+      uid: task.uid,
+      guildId: task.guildId,
+      platform: task.platform,
+      retryCount: task.retryCount,
+    }
+
+    if (task.id !== undefined) {
+      context.taskId = String(task.id)
+    }
+
+    if (task.platform && task.guildId) {
+      context.target = `${task.platform}:${task.guildId}`
+    }
+
+    return context
+  }
+
+  private createTaskDebug(task: Partial<QueueTask>) {
+    return createDebugWithContext(this.config, this.buildTaskLogContext(task))
+  }
+
   /**
    * 添加任务到队列
    */
@@ -73,8 +100,10 @@ export class NotificationQueueManager {
       updatedAt: new Date()
     }
 
+    const taskDebug = this.createTaskDebug(queueTask)
+
     await this.ctx.database.create(('rss_notification_queue' as any), queueTask)
-    debug(this.config, `任务已加入队列: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
+    taskDebug(`任务已加入队列: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
 
     return queueTask
   }
@@ -84,7 +113,7 @@ export class NotificationQueueManager {
    */
   async processQueue(): Promise<void> {
     if (this.processing) {
-      debug(this.config, '队列正在处理中，跳过本次', 'queue', 'details')
+      debug(this.config, '队列正在处理中，跳过本次', 'queue', 'details', { processing: true })
       return
     }
 
@@ -97,15 +126,16 @@ export class NotificationQueueManager {
         return
       }
 
-      debug(this.config, `开始处理 ${tasks.length} 个待发送任务`, 'queue', 'info')
+      debug(this.config, `开始处理 ${tasks.length} 个待发送任务`, 'queue', 'info', { taskCount: tasks.length })
 
       // 2. 逐个处理任务
       for (const task of tasks) {
         await this.processTask(task)
       }
     } catch (err: any) {
-      debug(this.config, `队列处理异常: ${err.message}`, 'queue', 'error')
-      console.error('Queue processing error:', err)
+      const normalizedError = normalizeError(err)
+      debug(this.config, `队列处理异常: ${normalizedError.message}`, 'queue', 'error', { processing: true })
+      trackError(normalizedError, { operation: 'processQueue' })
     } finally {
       this.processing = false
     }
@@ -146,7 +176,9 @@ export class NotificationQueueManager {
    * 处理单个任务
    */
   private async processTask(task: QueueTask): Promise<void> {
-    debug(this.config, `处理任务 [${task.rssId}] ${task.content.title} (重试${task.retryCount}次)`, 'queue', 'details')
+    const taskDebug = this.createTaskDebug(task)
+
+    taskDebug(`处理任务 [${task.rssId}] ${task.content.title} (重试${task.retryCount}次)`, 'queue', 'details')
 
     try {
       // 尝试发送消息
@@ -154,7 +186,7 @@ export class NotificationQueueManager {
 
       // 发送成功：标记为 SUCCESS
       await this.markTaskSuccess(task.id!)
-      debug(this.config, `✓ 任务发送成功: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
+      taskDebug(`✓ 任务发送成功: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
 
       // 写入缓存
       await this.cacheMessage(task)
@@ -171,18 +203,19 @@ export class NotificationQueueManager {
   private async sendMessage(task: QueueTask): Promise<void> {
     const { guildId, platform, content } = task
     const target = `${platform}:${guildId}`
+    const taskDebug = this.createTaskDebug(task)
 
     try {
       // 第一次尝试：发送原始消息
       await this.ctx.broadcast([target], content.message)
-      debug(this.config, `消息发送成功: ${target}`, 'queue', 'details')
+      taskDebug(`消息发送成功: ${target}`, 'queue', 'details')
 
     } catch (sendError: any) {
       // OneBot retcode 1200: 不支持的消息格式（通常是视频）
       const isOneBot1200 = sendError.code?.toString?.() === '1200' || sendError.message?.includes('1200')
 
       if (isOneBot1200 && !content.isDowngraded) {
-        debug(this.config, `检测到 OneBot 1200 错误，尝试降级处理`, 'queue', 'info')
+        taskDebug(`检测到 OneBot 1200 错误，尝试降级处理`, 'queue', 'info', { errorCode: '1200' })
         throw { ...sendError, isMediaError: true, requiresDowngrade: true }
       }
 
@@ -194,20 +227,33 @@ export class NotificationQueueManager {
    * 处理发送错误
    */
   private async handleSendError(task: QueueTask, error: any): Promise<void> {
-    const errorMsg = error.message || 'Unknown error'
+    const taskDebug = this.createTaskDebug(task)
+    const normalizedError = normalizeError(error)
+    const errorMsg = normalizedError.message || 'Unknown error'
+
+    trackError(normalizedError, {
+      ...this.buildTaskLogContext(task),
+      failReason: errorMsg,
+      requiresDowngrade: Boolean(error?.requiresDowngrade),
+    })
 
     // 1. 永久性错误 (Fatal) - 不需要重试
     if (this.isFatalError(error)) {
       await this.markTaskFailed(task.id!, errorMsg)
-      debug(this.config, `✗ 永久性失败，放弃重试: [${task.rssId}] ${task.content.title} - ${errorMsg}`, 'queue', 'error')
+      taskDebug(`✗ 永久性失败，放弃重试: [${task.rssId}] ${task.content.title} - ${errorMsg}`, 'queue', 'error', {
+        fatal: true,
+        failReason: errorMsg,
+      })
       return
     }
 
     // 2. 降级重试 (Downgrade) - 针对媒体格式错误
     if (error.requiresDowngrade && !task.content.isDowngraded) {
       const downgradedContent = await this.downgradeMessage(task.content)
-      await this.updateTaskForDowngrade(task.id!, downgradedContent)
-      debug(this.config, `→ 消息已降级，立即重试: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
+      await this.updateTaskForDowngrade(task, downgradedContent)
+      taskDebug(`→ 消息已降级，立即重试: [${task.rssId}] ${task.content.title}`, 'queue', 'info', {
+        requiresDowngrade: true,
+      })
       return
     }
 
@@ -215,8 +261,11 @@ export class NotificationQueueManager {
     const delay = this.backoffDelays[task.retryCount] || this.backoffDelays[this.backoffDelays.length - 1]
     const nextTime = new Date(Date.now() + delay * 1000)
 
-    await this.markTaskRetry(task.id!, nextTime, errorMsg)
-    debug(this.config, `→ 任务将在 ${Math.ceil(delay / 60)} 分钟后重试: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
+    await this.markTaskRetry(task, nextTime, errorMsg)
+    taskDebug(`→ 任务将在 ${Math.ceil(delay / 60)} 分钟后重试: [${task.rssId}] ${task.content.title}`, 'queue', 'info', {
+      nextRetryTime: nextTime.toISOString(),
+      failReason: errorMsg,
+    })
   }
 
   /**
@@ -291,13 +340,11 @@ export class NotificationQueueManager {
   /**
    * 标记任务为重试
    */
-  private async markTaskRetry(taskId: number, nextTime: Date, reason: string): Promise<void> {
-    await this.ctx.database.set(('rss_notification_queue' as any), { id: taskId }, {
+  private async markTaskRetry(task: QueueTask, nextTime: Date, reason: string): Promise<void> {
+    await this.ctx.database.set(('rss_notification_queue' as any), { id: task.id }, {
       status: 'RETRY',
       nextRetryTime: nextTime,
-      retryCount: this.ctx.database.get(('rss_notification_queue' as any), { id: taskId }).then((tasks: any[]) => {
-        return (tasks[0]?.retryCount || 0) + 1
-      }),
+      retryCount: (task.retryCount || 0) + 1,
       failReason: reason,
       updatedAt: new Date()
     })
@@ -306,19 +353,12 @@ export class NotificationQueueManager {
   /**
    * 更新任务为降级重试
    */
-  private async updateTaskForDowngrade(taskId: number, newContent: QueueTaskContent): Promise<void> {
-    // 获取当前任务
-    const tasks = await this.ctx.database.get(('rss_notification_queue' as any), { id: taskId }) as any[]
-
-    if (tasks.length === 0) return
-
-    const currentTask = tasks[0]
-
-    await this.ctx.database.set(('rss_notification_queue' as any), { id: taskId }, {
+  private async updateTaskForDowngrade(task: QueueTask, newContent: QueueTaskContent): Promise<void> {
+    await this.ctx.database.set(('rss_notification_queue' as any), { id: task.id }, {
       content: newContent,
       status: 'RETRY',
       nextRetryTime: new Date(), // 立即重试
-      retryCount: currentTask.retryCount + 1,
+      retryCount: (task.retryCount || 0) + 1,
       updatedAt: new Date()
     })
   }
@@ -342,6 +382,8 @@ export class NotificationQueueManager {
       return
     }
 
+    const taskDebug = this.createTaskDebug(task)
+
     const { getMessageCache } = await import('../utils/message-cache')
     const cache = getMessageCache()
 
@@ -363,7 +405,12 @@ export class NotificationQueueManager {
         finalMessage: task.content.message
       })
     } catch (err: any) {
-      debug(this.config, `缓存消息失败: ${err.message}`, 'cache', 'info')
+      const normalizedError = normalizeError(err)
+      taskDebug(`缓存消息失败: ${normalizedError.message}`, 'cache', 'info')
+      trackError(normalizedError, {
+        ...this.buildTaskLogContext(task),
+        operation: 'cacheMessage',
+      })
     }
   }
 
@@ -392,8 +439,9 @@ export class NotificationQueueManager {
   async retryFailedTasks(taskId?: number): Promise<number> {
     const where = taskId ? { id: taskId } : { status: 'FAILED' }
     const tasks = await this.ctx.database.get(('rss_notification_queue' as any), where)
+    const failedTasks = tasks.filter(task => task.status === 'FAILED')
 
-    for (const task of tasks) {
+    for (const task of failedTasks) {
       await this.ctx.database.set(('rss_notification_queue' as any), { id: task.id }, {
         status: 'PENDING',
         retryCount: 0,
@@ -402,9 +450,12 @@ export class NotificationQueueManager {
       })
     }
 
-    debug(this.config, `已重置 ${tasks.length} 个失败任务为 PENDING 状态`, 'queue', 'info')
+    debug(this.config, `已重置 ${failedTasks.length} 个失败任务为 PENDING 状态`, 'queue', 'info', {
+      resetCount: failedTasks.length,
+      taskId,
+    })
 
-    return tasks.length
+    return failedTasks.length
   }
 
   /**
@@ -422,7 +473,10 @@ export class NotificationQueueManager {
       await this.ctx.database.remove(('rss_notification_queue' as any), { id: task.id })
     }
 
-    debug(this.config, `已清理 ${tasks.length} 个旧的成功任务`, 'queue', 'info')
+    debug(this.config, `已清理 ${tasks.length} 个旧的成功任务`, 'queue', 'info', {
+      cleanupCount: tasks.length,
+      olderThanHours,
+    })
 
     return tasks.length
   }

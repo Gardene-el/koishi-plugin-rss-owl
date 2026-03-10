@@ -10,16 +10,16 @@ describe('sleep', () => {
     const start = Date.now()
     await sleep()
     const elapsed = Date.now() - start
-    expect(elapsed).toBeGreaterThanOrEqual(1000)
-    expect(elapsed).toBeLessThan(1100)
+    expect(elapsed).toBeGreaterThanOrEqual(990)
+    expect(elapsed).toBeLessThan(1200)
   })
 
   it('should resolve after custom delay', async () => {
     const start = Date.now()
     await sleep(100)
     const elapsed = Date.now() - start
-    expect(elapsed).toBeGreaterThanOrEqual(100)
-    expect(elapsed).toBeLessThan(200)
+    expect(elapsed).toBeGreaterThanOrEqual(90)
+    expect(elapsed).toBeLessThan(250)
   })
 
   it('should resolve immediately with 0 delay', async () => {

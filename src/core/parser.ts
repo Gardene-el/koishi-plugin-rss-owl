@@ -3,6 +3,7 @@ import { Context } from 'koishi'
 import { Config, rssArg } from '../types'
 import { debug } from '../utils/logger'
 import { parseContent } from '../utils/common'
+import { validateUrlOrThrow, SecurityError, getSecurityOptions } from '../utils/security'
 
 const X2JS = require("x2js")
 const x2js = new X2JS()
@@ -15,6 +16,17 @@ export async function getRssData(
   arg: rssArg
 ): Promise<any[]> {
   try {
+    // URL 安全验证
+    try {
+      validateUrlOrThrow(url, getSecurityOptions(config))
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        debug(config, `URL 安全验证失败: ${error.message}`, 'security', 'error')
+        throw error
+      }
+      throw error
+    }
+
     // --- HTML 抓取预处理 START ---
     let rssData: any
     let contentType = ''

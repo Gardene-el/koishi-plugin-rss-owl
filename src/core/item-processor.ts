@@ -8,6 +8,8 @@ import { renderHtml2Image, preprocessHtmlImages } from './renderer'
 import { getDefaultTemplate, getDescriptionTemplate } from '../utils/template'
 import { getAiSummary } from './ai'
 import { marked } from 'marked'
+import { createSanitizer } from '../utils/sanitizer'
+import { validateUrlOrThrow, SecurityError, getSecurityOptions } from '../utils/security'
 
 export class RssItemProcessor {
   constructor(
@@ -23,6 +25,12 @@ export class RssItemProcessor {
     let html: any;
     let videoList: any[] = [];
     item.description = item.description?.join?.('') || item.description;
+
+    // HTML 安全清理
+    const sanitizer = createSanitizer(this.config)
+    if (sanitizer.isEnabled() && item.description) {
+      item.description = sanitizer.sanitize(item.description)
+    }
 
     // --- AI 逻辑 START ---
     let aiSummary = "";
@@ -207,37 +215,7 @@ export class RssItemProcessor {
       await Promise.all(html('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
     }
     html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
-    let msg = "";
-    const imageMode = this.config.basic?.imageMode;
-
-    if (imageMode == 'base64') {
-      debug(this.config, '使用 base64 模式渲染', 'render mode', 'info');
-      msg = (await renderHtml2Image(this.ctx, this.config, this.$http, html.html(), arg)).toString();
-    } else if (imageMode == 'File' || imageMode == 'assets') {
-      if (!this.ctx.puppeteer) {
-        debug(this.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error');
-        msg = html.html();
-      } else {
-        try {
-          debug(this.config, `使用 ${imageMode} 模式渲染`, 'render mode', 'info');
-          let processedHtml = await preprocessHtmlImages(this.ctx, this.config, this.$http, html.html(), arg);
-          if ((this.config.template?.deviceScaleFactor ?? 1) !== 1) {
-            msg = (await renderHtml2Image(this.ctx, this.config, this.$http, processedHtml, arg)).toString();
-          } else {
-            msg = await this.ctx.puppeteer.render(processedHtml);
-          }
-          msg = await puppeteerToFile(this.ctx, this.config, msg);
-          debug(this.config, 'puppeteer 渲染完成', 'render success', 'info');
-        } catch (error) {
-          debug(this.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error');
-          msg = html.html();
-        }
-      }
-    } else {
-      // 未知 imageMode，回退到 HTML
-      debug(this.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error');
-      msg = html.html();
-    }
+    let msg = await this.renderImage(html.html(), arg);
     return parseContent(this.config.template?.customRemark || '', { ...item, arg, description: msg });
   }
 
@@ -310,38 +288,7 @@ export class RssItemProcessor {
     html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
     debug(this.config, `当前 imageMode: ${this.config.basic?.imageMode}`, 'imageMode', 'info');
 
-    let msg = "";
-    const imageMode = this.config.basic?.imageMode;
-
-    if (imageMode == 'base64') {
-      debug(this.config, '使用 base64 模式渲染', 'render mode', 'info');
-      msg = (await renderHtml2Image(this.ctx, this.config, this.$http, html.html(), arg)).toString();
-    } else if (imageMode == 'File' || imageMode == 'assets') {
-      if (!this.ctx.puppeteer) {
-        debug(this.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error');
-        msg = html.html();
-      } else {
-        try {
-          debug(this.config, `使用 ${imageMode} 模式渲染`, 'render mode', 'info');
-          let processedHtml = await preprocessHtmlImages(this.ctx, this.config, this.$http, html.html(), arg);
-          if ((this.config.template?.deviceScaleFactor ?? 1) !== 1) {
-            msg = (await renderHtml2Image(this.ctx, this.config, this.$http, processedHtml, arg)).toString();
-          } else {
-            msg = await this.ctx.puppeteer.render(processedHtml);
-          }
-          debug(this.config, `puppeteer.render() 返回: ${msg.substring(0, 100)}...`, 'puppeteer result', 'info');
-          msg = await puppeteerToFile(this.ctx, this.config, msg);
-          debug(this.config, `puppeteerToFile 转换完成`, 'puppeteer', 'info');
-        } catch (error) {
-          debug(this.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error');
-          msg = html.html();
-        }
-      }
-    } else {
-      // 未知 imageMode，回退到 HTML
-      debug(this.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error');
-      msg = html.html();
-    }
+    let msg = await this.renderImage(html.html(), arg);
     return msg;
   }
 
@@ -379,34 +326,7 @@ export class RssItemProcessor {
     }
     html('img').attr('style', 'object-fit:scale-down;max-width:100%;');
 
-    let msg = "";
-    const imageMode = this.config.basic?.imageMode;
-
-    if (imageMode == 'base64') {
-      msg = (await renderHtml2Image(this.ctx, this.config, this.$http, html.html(), arg)).toString();
-    } else if (imageMode == 'File' || imageMode == 'assets') {
-      if (!this.ctx.puppeteer) {
-        debug(this.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error');
-        msg = html.html();
-      } else {
-        try {
-          let processedHtml = await preprocessHtmlImages(this.ctx, this.config, this.$http, html.html(), arg);
-          if ((this.config.template?.deviceScaleFactor ?? 1) !== 1) {
-            msg = (await renderHtml2Image(this.ctx, this.config, this.$http, processedHtml, arg)).toString();
-          } else {
-            msg = await this.ctx.puppeteer.render(processedHtml);
-          }
-          msg = await puppeteerToFile(this.ctx, this.config, msg);
-        } catch (error) {
-          debug(this.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error');
-          msg = html.html();
-        }
-      }
-    } else {
-      // 未知 imageMode，回退到 HTML
-      debug(this.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error');
-      msg = html.html();
-    }
+    let msg = await this.renderImage(html.html(), arg);
     return msg;
   }
 
@@ -414,41 +334,29 @@ export class RssItemProcessor {
     let html = cheerio.load(item.description);
     let src = html('a')[0].attribs.href;
     debug(this.config, src, 'link src', 'info');
+
+    // URL 安全验证
+    try {
+      validateUrlOrThrow(src, getSecurityOptions(this.config))
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        debug(this.config, `链接 URL 安全验证失败: ${error.message}`, 'security', 'error')
+        return `链接安全验证失败: ${error.message}`
+      }
+      throw error
+    }
+
     let html2 = cheerio.load((await this.$http(src, arg)).data);
     if (arg?.proxyAgent?.enabled) {
       await Promise.all(html2('img').map(async (v: any, i: any) => i.attribs.src = await getImageUrl(this.ctx, this.config, this.$http, i.attribs.src, arg, true)).get());
     }
     html2('img').attr('style', 'object-fit:scale-down;max-width:100%;');
-    html2('body').attr('style', `width:${this.config.template?.bodyWidth || 600}px;padding:${this.config.template?.bodyPadding || 20}px;`);
+    // link 模板使用订阅级参数设置 body 样式
+    const bodyWidth = arg?.bodyWidth ?? this.config.template?.bodyWidth ?? 600
+    const bodyPadding = arg?.bodyPadding ?? this.config.template?.bodyPadding ?? 20
+    html2('body').attr('style', `width:${bodyWidth}px;padding:${bodyPadding}px;`);
 
-    let msg = "";
-    const imageMode = this.config.basic?.imageMode;
-
-    if (imageMode == 'base64') {
-      msg = (await renderHtml2Image(this.ctx, this.config, this.$http, html2.xml(), arg)).toString();
-    } else if (imageMode == 'File' || imageMode == 'assets') {
-      if (!this.ctx.puppeteer) {
-        debug(this.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error');
-        msg = html2.xml();
-      } else {
-        try {
-          let processedHtml = await preprocessHtmlImages(this.ctx, this.config, this.$http, html2.xml(), arg);
-          if ((this.config.template?.deviceScaleFactor ?? 1) !== 1) {
-            msg = (await renderHtml2Image(this.ctx, this.config, this.$http, processedHtml, arg)).toString();
-          } else {
-            msg = await this.ctx.puppeteer.render(processedHtml);
-          }
-          msg = await puppeteerToFile(this.ctx, this.config, msg);
-        } catch (error) {
-          debug(this.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error');
-          msg = html2.xml();
-        }
-      }
-    } else {
-      // 未知 imageMode，回退到 HTML
-      debug(this.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error');
-      msg = html2.xml();
-    }
+    let msg = await this.renderImage(html2.xml(), arg);
     return msg;
   }
 
@@ -471,5 +379,50 @@ export class RssItemProcessor {
       // 其他模式：创建 video 元素
       return h('video', { src, poster })
     }).join('')
+  }
+
+  /**
+   * 统一的图片渲染方法
+   * 提取了 custom、default、only description、link 模板中重复的图片渲染逻辑
+   */
+  private async renderImage(htmlContent: string, arg: rssArg): Promise<string> {
+    const imageMode = this.config.basic?.imageMode;
+
+    // base64 模式
+    if (imageMode === 'base64') {
+      debug(this.config, '使用 base64 模式渲染', 'render mode', 'info');
+      return (await renderHtml2Image(this.ctx, this.config, this.$http, htmlContent, arg)).toString();
+    }
+
+    // File 或 assets 模式
+    if (imageMode === 'File' || imageMode === 'assets') {
+      if (!this.ctx.puppeteer) {
+        debug(this.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error');
+        return htmlContent;
+      }
+
+      try {
+        debug(this.config, `使用 ${imageMode} 模式渲染`, 'render mode', 'info');
+        const processedHtml = await preprocessHtmlImages(this.ctx, this.config, this.$http, htmlContent, arg);
+
+        let msg: string;
+        if ((this.config.template?.deviceScaleFactor ?? 1) !== 1) {
+          msg = (await renderHtml2Image(this.ctx, this.config, this.$http, processedHtml, arg)).toString();
+        } else {
+          msg = await this.ctx.puppeteer.render(processedHtml);
+        }
+
+        msg = await puppeteerToFile(this.ctx, this.config, msg);
+        debug(this.config, 'puppeteer 渲染完成', 'render success', 'info');
+        return msg;
+      } catch (error) {
+        debug(this.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error');
+        return htmlContent;
+      }
+    }
+
+    // 未知模式，回退到 HTML
+    debug(this.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error');
+    return htmlContent;
   }
 }

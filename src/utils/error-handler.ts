@@ -209,6 +209,40 @@ export function createError(message: string, errorType: ErrorType): Error {
 }
 
 /**
+ * 将未知异常归一化为 Error 实例
+ *
+ * @param error - 原始错误对象
+ * @param fallbackMessage - 默认错误消息
+ * @returns 标准 Error 实例
+ */
+export function normalizeError(error: unknown, fallbackMessage = 'Unknown error'): Error {
+  if (error instanceof Error) {
+    return error
+  }
+
+  if (typeof error === 'string') {
+    return new Error(error || fallbackMessage)
+  }
+
+  if (error && typeof error === 'object') {
+    const normalized = new Error(
+      typeof (error as any).message === 'string' && (error as any).message.trim()
+        ? (error as any).message
+        : fallbackMessage
+    ) as Error & Record<string, any>
+
+    Object.assign(normalized, error)
+    return normalized
+  }
+
+  if (error === undefined || error === null) {
+    return new Error(fallbackMessage)
+  }
+
+  return new Error(String(error))
+}
+
+/**
  * 判断是否为网络错误
  *
  * @param error - 错误对象

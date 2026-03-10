@@ -45,8 +45,10 @@ export interface Config {
   ai?: AiConfig
   search?: SearchConfig
   cache?: CacheConfig
+  security?: SecurityConfig
   debug?: "disable"|"error"|"info"|"details"
   logging?: LoggingConfig
+  errorTracking?: ErrorTrackingConfig
 }
 
 export const debugLevel = ["disable","error","info","details"]
@@ -179,11 +181,35 @@ export interface LoggingConfig {
   includeModule?: boolean  // 包含模块名
   includeContext?: boolean  // 包含额外上下文信息
   contextFields?: string[]  // 要包含的上下文字段
+  sanitizeLogs?: boolean  // 是否自动脱敏日志中的敏感信息（默认 true）
+}
+
+export interface ErrorTrackingConfig {
+  enabled?: boolean
+  dsn?: string
+  environment?: string
+  release?: string
+  tracesSampleRate?: number
+  profilesSampleRate?: number
 }
 
 /**
  * 联网搜索配置
  */
+/**
+ * 安全配置
+ */
+export interface SecurityConfig {
+  enabled?: boolean        // 是否启用安全检查（默认 false，不启用）
+  whitelist?: string[]   // 白名单域名
+  blacklist?: string[]   // 黑名单域名
+  allowHttp?: boolean    // 是否允许 HTTP（默认 true）
+  allowHttps?: boolean   // 是否允许 HTTPS（默认 true）
+  allowInternalAccess?: boolean  // 是否允许访问内网 IP（默认 false）
+  sanitizeHtml?: boolean // 是否启用 HTML 清理（默认 true）
+  maxCacheSize?: number  // AI 缓存最大条数
+}
+
 export interface SearchConfig {
   enabled?: boolean  // 是否启用联网搜索
   engine?: 'tavily' | 'searxng' | 'volcengine' | 'auto'  // 搜索引擎选择，auto 表示自动选择

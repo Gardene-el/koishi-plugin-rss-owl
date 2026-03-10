@@ -57,28 +57,67 @@ export const parseContent = (content: any, attr = undefined): string | undefined
 
 // 模板内容解析函数
 export const parseTemplateContent = (template: string, item: any): string => {
-  return template.replace(/{{(.+?)}}/g, (i: string) =>
-    i.match(/^{{(.*)}}$/)[1].split("|").reduce((t: any, v: string) =>
-      t || v.match(/^'(.*)'$/)?.[1] || v.split(".").reduce((t: any, v: string) =>
-        new RegExp("Date").test(v) ? new Date(t?.[v]).toLocaleString('zh-CN') : t?.[v] || ""
-      , item)
-    , '')
-  )
+  return template.replace(/{{(.+?)}}/g, (i: string) => {
+    // 添加空值检查，防止 match 返回 null 时崩溃
+    const match = i.match(/^{{(.*)}}$/)
+    if (!match) return i
+
+    const content = match[1]
+    if (!content) return i
+
+    return content.split("|").reduce((t: any, v: string) => {
+      // 添加空值检查
+      const literalMatch = v.match(/^'(.*)'$/)
+      if (literalMatch) {
+        return t || literalMatch[1]
+      }
+
+      return v.split(".").reduce((t: any, v: string) => {
+        // Date 格式化处理
+        if (new RegExp("Date").test(v)) {
+          const dateVal = t?.[v]
+          return dateVal ? new Date(dateVal).toLocaleString('zh-CN') : ""
+        }
+        return t?.[v] || ""
+      }, item)
+    }, '')
+  })
 }
 
 // 快速URL解析函数
 export const parseQuickUrl = (url: string, rssHubUrl: string, quickList: any[]): string => {
   let correntQuickObj = quickList.find(i => new RegExp(`^${i.prefix}:`).test(url))
   if (!correntQuickObj) return url
-  let route = url.match(new RegExp(`(?<=^${correntQuickObj.prefix}:).*`))[0]
-  const parseContent = (template: string, item: any) =>
-    template.replace(/{{(.+?)}}/g, i =>
-      i.match(/^{{(.*)}}$/)[1].split("|").reduce((t: any, v: string) =>
-        t || v.match(/^'(.*)'$/)?.[1] || v.split(".").reduce((t: any, v: any) =>
-          new RegExp("Date").test(v) ? new Date(t?.[v]).toLocaleString('zh-CN') : t?.[v] || ""
-        , item)
-      , '')
-    )
+  let routeMatch = url.match(new RegExp(`(?<=^${correntQuickObj.prefix}:).*`))
+  if (!routeMatch) return url
+  let route = routeMatch[0]
+
+  const parseContent = (template: string, item: any): string => {
+    return template.replace(/{{(.+?)}}/g, (i: string) => {
+      // 添加空值检查，防止 match 返回 null 时崩溃
+      const match = i.match(/^{{(.*)}}$/)
+      if (!match) return i
+
+      const content = match[1]
+      if (!content) return i
+
+      return content.split("|").reduce((t: any, v: string) => {
+        const literalMatch = v.match(/^'(.*)'$/)
+        if (literalMatch) {
+          return t || literalMatch[1]
+        }
+
+        return v.split(".").reduce((t: any, v: any) => {
+          if (new RegExp("Date").test(v)) {
+            const dateVal = t?.[v]
+            return dateVal ? new Date(dateVal).toLocaleString('zh-CN') : ""
+          }
+          return t?.[v] || ""
+        }, item)
+      }, '')
+    })
+  }
+
   let rUrl = parseContent(correntQuickObj.replace, { rsshub: rssHubUrl, route })
   return rUrl
 }
