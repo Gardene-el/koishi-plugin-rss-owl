@@ -34,6 +34,41 @@ export class RssItemProcessor {
       || this.config.basic?.imageMode === 'assets'
   }
 
+  private collectUniqueImageSources(html: any): string[] {
+    const imageSources: string[] = []
+    html('img').each((_: any, element: any) => {
+      const src = element.attribs?.src
+      if (src) {
+        imageSources.push(src)
+      }
+    })
+    return [...new Set(imageSources)]
+  }
+
+  private async buildResolvedImageMap(html: any, arg: rssArg): Promise<Record<string, string>> {
+    const imageSources = this.collectUniqueImageSources(html)
+    return Object.assign(
+      {},
+      ...(await Promise.all(
+        imageSources.map(async (src: string) => ({
+          [src]: await getImageUrl(this.ctx, this.config, this.$http, src, arg),
+        })),
+      )),
+    )
+  }
+
+  private async renderImageListFromHtml(html: any, arg: rssArg): Promise<string> {
+    const imageSources = this.collectUniqueImageSources(html)
+    const resolvedImages = await Promise.all(
+      imageSources.map(async (src: string) => await getImageUrl(this.ctx, this.config, this.$http, src, arg)),
+    )
+
+    return resolvedImages
+      .filter(Boolean)
+      .map(imageUrl => `<img src="${imageUrl}"/>`)
+      .join('')
+  }
+
   private async prependAiSummarySection(
     htmlContent: string,
     item: any,
@@ -81,6 +116,36 @@ export class RssItemProcessor {
     }
     html('img').attr('style', 'object-fit:scale-down;max-width:100%;')
     return useXml ? html.xml() : html.html()
+  }
+
+  private async renderLoadedHtml(html: any, arg: rssArg, useXml = false): Promise<string> {
+    return await this.renderImage(await this.prepareHtmlForRender(html, arg, useXml), arg)
+  }
+
+  private async renderTemplatedDescription(
+    item: any,
+    arg: rssArg,
+    description: string,
+    options?: {
+      contentStyle?: string
+      dividerStyle?: string
+      logImageMode?: boolean
+    },
+  ): Promise<string> {
+    item.description = description
+    debug(this.config, item.description, 'description')
+
+    item.description = await this.prependAiSummarySection(item.description, item, {
+      contentStyle: options?.contentStyle,
+      dividerStyle: options?.dividerStyle,
+    })
+
+    const html = cheerio.load(item.description)
+    if (options?.logImageMode) {
+      debug(this.config, `当前 imageMode: ${this.config.basic?.imageMode}`, 'imageMode', 'info')
+    }
+
+    return await this.renderLoadedHtml(html, arg)
   }
 
   async parseRssItem(item: any, arg: rssArg, authorId: string | number): Promise<string> {
@@ -190,7 +255,7 @@ export class RssItemProcessor {
 
     switch (template) {
       case "custom":
-        msg = await this.processCustomTemplate(item, arg, html, parseContent);
+        msg = await this.processCustomTemplate(item, arg, parseContent);
         await this.processVideos(html, arg, videoList);
         msg += this.formatVideoList(videoList);
         break;
@@ -207,13 +272,13 @@ export class RssItemProcessor {
         break;
 
       case "only media":
-        msg = await this.processOnlyMediaTemplate(item, arg, html);
+        msg = await this.processOnlyMediaTemplate(arg, html);
         await this.processVideos(html, arg, videoList);
         msg += this.formatVideoList(videoList);
         break;
 
       case "only image":
-        msg = await this.processOnlyImageTemplate(item, arg, html);
+        msg = await this.processOnlyImageTemplate(arg, html);
         break;
 
       case "only video":
@@ -226,13 +291,13 @@ export class RssItemProcessor {
         break;
 
       case "default":
-        msg = await this.processDefaultTemplate(item, arg, html, parseContent);
+        msg = await this.processDefaultTemplate(item, arg, parseContent);
         await this.processVideos(html, arg, videoList);
         msg += this.formatVideoList(videoList);
         break;
 
       case "only description":
-        msg = await this.processOnlyDescriptionTemplate(item, arg, html, parseContent);
+        msg = await this.processOnlyDescriptionTemplate(item, arg, parseContent);
         await this.processVideos(html, arg, videoList);
         msg += this.formatVideoList(videoList);
         break;
@@ -248,77 +313,58 @@ export class RssItemProcessor {
     return msg;
   }
 
-  private async processCustomTemplate(item: any, arg: rssArg, html: any, parseContent: any): Promise<string> {
-    item.description = parseContent(this.config.template?.custom || '', { ...item, arg });
-    debug(this.config, item.description, 'description');
-
-    item.description = await this.prependAiSummarySection(item.description, item)
-
-    html = cheerio.load(item.description);
-    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
-    return parseContent(this.config.template?.customRemark || '', { ...item, arg, description: msg });
+  private async processCustomTemplate(item: any, arg: rssArg, parseContent: any): Promise<string> {
+    const description = parseContent(this.config.template?.custom || '', { ...item, arg })
+    const renderedDescription = await this.renderTemplatedDescription(item, arg, description)
+    return parseContent(this.config.template?.customRemark || '', { ...item, arg, description: renderedDescription })
   }
 
   private async processContentTemplate(item: any, arg: rssArg, html: any, parseContent: any): Promise<string> {
-    let imgList: string[] = [];
-    html('img').map((key: any, i: any) => imgList.push(i.attribs.src));
-    imgList = [...new Set(imgList)];
-    let imgBufferList = Object.assign({}, ...(await Promise.all(imgList.map(async (src: string) => ({ [src]: await getImageUrl(this.ctx, this.config, this.$http, src, arg) })))));
+    const resolvedImageMap = await this.buildResolvedImageMap(html, arg)
+    html('img').replaceWith((_: any, element: any) => {
+      const src = element.attribs?.src
+      return src ? `<p>$img{{${src}}}</p>` : ''
+    })
+    const contentText = html.text()
 
-    html('img').replaceWith((key: any, Dom: any) => `<p>$img{{${imgList[key]}}}</p>`);
-    let msg = html.text();
 
-    item.description = msg.replace(/\$img\{\{(.*?)\}\}/g, (match: string) => {
-      let src = match.match(/\$img\{\{(.*?)\}\}/)[1];
-      let finalUrl = imgBufferList[src];
-      return finalUrl ? `<img src="${finalUrl}"/>` : '';
-    });
+    item.description = contentText.replace(/\$img\{\{(.*?)\}\}/g, (_match: string, src: string) => {
+      const finalUrl = resolvedImageMap[src]
+      return finalUrl ? `<img src="${finalUrl}"/>` : ''
+    })
 
     return parseContent(this.config.template?.content || '', { ...item, arg });
   }
 
-  private async processOnlyMediaTemplate(item: any, arg: rssArg, html: any): Promise<string> {
-    let imgList: string[] = [];
-    html('img').map((key: any, i: any) => imgList.push(i.attribs.src));
-    imgList = await Promise.all([...new Set(imgList)].map(async (src: string) => await getImageUrl(this.ctx, this.config, this.$http, src, arg)));
-
-    return imgList.filter(Boolean).map(img => `<img src="${img}"/>`).join("");
+  private async processOnlyMediaTemplate(arg: rssArg, html: any): Promise<string> {
+    return await this.renderImageListFromHtml(html, arg)
   }
 
-  private async processOnlyImageTemplate(item: any, arg: rssArg, html: any): Promise<string> {
-    let imgList: string[] = [];
-    html('img').map((key: any, i: any) => imgList.push(i.attribs.src));
-    imgList = await Promise.all([...new Set(imgList)].map(async (src: string) => await getImageUrl(this.ctx, this.config, this.$http, src, arg)));
-
-    return imgList.filter(Boolean).map(img => `<img src="${img}"/>`).join("");
+  private async processOnlyImageTemplate(arg: rssArg, html: any): Promise<string> {
+    return await this.renderImageListFromHtml(html, arg)
   }
 
-  private async processDefaultTemplate(item: any, arg: rssArg, html: any, parseContent: any): Promise<string> {
-    item.description = parseContent(getDefaultTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize), { ...item, arg });
-    debug(this.config, item.description, 'description');
+  private async processDefaultTemplate(item: any, arg: rssArg, parseContent: any): Promise<string> {
+    const description = parseContent(
+      getDefaultTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize),
+      { ...item, arg },
+    )
 
-    item.description = await this.prependAiSummarySection(item.description, item)
-
-    html = cheerio.load(item.description);
-    debug(this.config, `当前 imageMode: ${this.config.basic?.imageMode}`, 'imageMode', 'info');
-
-    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
-    return msg;
+    return await this.renderTemplatedDescription(item, arg, description, {
+      logImageMode: true,
+    })
   }
 
-  private async processOnlyDescriptionTemplate(item: any, arg: rssArg, html: any, parseContent: any): Promise<string> {
-    item.description = parseContent(getDescriptionTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize), { ...item, arg });
-    debug(this.config, item.description, 'description');
+  private async processOnlyDescriptionTemplate(item: any, arg: rssArg, parseContent: any): Promise<string> {
+    const description = parseContent(
+      getDescriptionTemplate(this.config, arg.bodyWidth, arg.bodyPadding, arg.bodyFontSize || this.config.template?.bodyFontSize),
+      { ...item, arg },
+    )
 
-    item.description = await this.prependAiSummarySection(item.description, item, {
+    return await this.renderTemplatedDescription(item, arg, description, {
       contentStyle: 'color: #475569; line-height: 1.6;',
       dividerStyle: 'border-top: 1px solid #e2e8f0; margin: 24px 0;',
     })
-
-    html = cheerio.load(item.description);
-
-    let msg = await this.renderImage(await this.prepareHtmlForRender(html, arg), arg);
-    return msg;
   }
 
   private async processLinkTemplate(item: any, arg: rssArg): Promise<string> {
@@ -347,8 +393,7 @@ export class RssItemProcessor {
     const bodyPadding = arg?.bodyPadding ?? this.config.template?.bodyPadding ?? 20
     html2('body').attr('style', `width:${bodyWidth}px;padding:${bodyPadding}px;`);
 
-    let msg = await this.renderImage(await this.prepareHtmlForRender(html2, arg, true), arg);
-    return msg;
+    return await this.renderLoadedHtml(html2, arg, true)
   }
 
   private async processVideos(html: any, arg: rssArg, videoList: any[]): Promise<void> {

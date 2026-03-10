@@ -1,12 +1,12 @@
 import { Context } from 'koishi'
 
-import type { Config } from '../types'
+import type { Config, TemplateType } from '../types'
 import { checkAuthority, extractSessionInfo, parseTargets } from './utils'
 
 interface EditCommandOptions {
   title?: string
   url?: string
-  template?: string
+  template?: TemplateType
   selector?: string
   target?: string
   test?: boolean

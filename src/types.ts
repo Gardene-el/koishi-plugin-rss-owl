@@ -16,7 +16,7 @@ declare module 'koishi' {
     platform: string
     guildId: string
     author: string
-    rssId: number
+    rssId: string | number
     arg: rssArg,
     title: string
     lastPubDate: Date
@@ -53,10 +53,30 @@ export interface Config {
 
 export const debugLevel = ["disable","error","info","details"]
 
+export type TemplateType =
+  | 'auto'
+  | 'content'
+  | 'only text'
+  | 'only media'
+  | 'only image'
+  | 'only video'
+  | 'proto'
+  | 'default'
+  | 'only description'
+  | 'custom'
+  | 'link'
+
+export interface CustomTemplateItem {
+  name: string
+  pptr?: boolean
+  content: string
+  remark?: string
+}
+
 export interface BasicConfig {
   usePoster: boolean;
   margeVideo: boolean;
-  defaultTemplate?: 'auto' | 'content' | 'only text' | 'only media' | 'only image' | 'only video' | 'proto' | 'default' | 'only description' | 'custom' | 'link'
+  defaultTemplate?: TemplateType
   timeout?: number
   refresh?: number
   merge?: '不合并' | '有多条更新时合并' | '一直合并'
@@ -84,7 +104,7 @@ export interface TemplateConfig {
   deviceScaleFactor?: 0.5 | 1 | 1.5 | 2 | 3
   content?: string
   custom?: string
-  customTemplate?: any[]
+  customTemplate?: CustomTemplateItem[]
 }
 
 export interface NetConfig {
@@ -137,7 +157,7 @@ export interface rss {
 }
 
 export interface rssArg {
-  template?: 'auto' | 'content' | 'only text' | 'only media' | 'only image' | 'only video' | 'proto' | 'default' | 'only description' | 'custom' | 'link'
+  template?: TemplateType
   content?: string
 
   forceLength?: number

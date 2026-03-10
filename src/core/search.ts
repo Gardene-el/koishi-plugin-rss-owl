@@ -10,9 +10,9 @@
  */
 
 import axios from 'axios'
-import { HttpsProxyAgent } from 'https-proxy-agent'
 import { Config, SearchConfig } from '../types'
 import { debug } from '../utils/logger'
+import { buildAxiosProxyConfig } from '../utils/proxy'
 
 /**
  * 搜索结果接口
@@ -175,21 +175,6 @@ interface VolcengineSearchTool {
 }
 
 /**
- * 构建代理配置
- */
-function buildProxyConfig(config: Config): any {
-  const requestConfig: any = {}
-
-  if (config.net.proxyAgent?.enabled) {
-    const proxyUrl = `${config.net.proxyAgent.protocol}://${config.net.proxyAgent.host}:${config.net.proxyAgent.port}`
-    requestConfig.httpsAgent = new HttpsProxyAgent(proxyUrl)
-    requestConfig.proxy = false
-  }
-
-  return requestConfig
-}
-
-/**
  * Tavily 搜索引擎
  *
  * @param config - 插件配置
@@ -216,7 +201,7 @@ export async function searchWithTavily(
         'Content-Type': 'application/json'
       },
       timeout: config.ai.timeout || 30000,
-      ...buildProxyConfig(config)
+      ...buildAxiosProxyConfig(config)
     }
 
     const requestBody: any = {
@@ -289,7 +274,7 @@ export async function searchWithSearxng(
     const baseUrl = instanceUrl.replace(/\/+$/, '')
     const requestConfig: any = {
       timeout: config.ai.timeout || 30000,
-      ...buildProxyConfig(config)
+      ...buildAxiosProxyConfig(config)
     }
 
     const params: any = {
@@ -372,7 +357,7 @@ export async function searchWithVolcengine(
         'Content-Type': 'application/json'
       },
       timeout: config.ai.timeout || 30000,
-      ...buildProxyConfig(config)
+      ...buildAxiosProxyConfig(config)
     }
 
     // 使用 Responses API 调用联网搜索工具

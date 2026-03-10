@@ -7,16 +7,25 @@ jest.mock('../../src/utils/sanitizer', () => ({
   })),
 }))
 
+jest.mock('../../src/utils/media', () => ({
+  getImageUrl: jest.fn(async (_ctx: unknown, _config: unknown, _http: unknown, src: string) => `mocked:${src}`),
+  getVideoUrl: jest.fn(async () => ''),
+  puppeteerToFile: jest.fn(async (_ctx: unknown, _config: unknown, msg: string) => msg),
+}))
+
 import { RssItemProcessor } from '../../src/core/item-processor'
+import { getImageUrl } from '../../src/utils/media'
 import { Config, rssArg } from '../../src/types'
 
 describe('RssItemProcessor', () => {
   let mockConfig: Config
   let mockHttp: jest.Mock<any>
+  const mockGetImageUrl = getImageUrl as jest.MockedFunction<typeof getImageUrl>
 
   beforeEach(() => {
     jest.clearAllMocks()
     mockHttp = jest.fn()
+    mockGetImageUrl.mockImplementation(async (_ctx: unknown, _config: unknown, _http: unknown, src: string) => `mocked:${src}`)
     mockConfig = {
       basic: {
         imageMode: 'File',
@@ -27,6 +36,7 @@ describe('RssItemProcessor', () => {
         bodyWidth: 600,
         bodyPadding: 20,
         deviceScaleFactor: 1,
+        content: '{{description}}',
       },
       msg: {
         blockString: '*',
@@ -90,5 +100,51 @@ describe('RssItemProcessor', () => {
     expect(result).toContain('</article>')
     expect(result).toContain('&#x8be6;&#x60c5;&#x9875;&#x5185;&#x5bb9;')
     expect(result).toContain('style="width:480px;padding:16px;"')
+  })
+
+  it('only image 模板应只解析唯一图片一次', async () => {
+    const processor = new RssItemProcessor({} as any, mockConfig, mockHttp)
+
+    const result = await processor.parseRssItem({
+      title: '图片测试',
+      description: '<p>封面</p><img src="https://example.com/a.png" /><img src="https://example.com/a.png" /><img src="https://example.com/b.png" />',
+    }, {
+      template: 'only image',
+    } as rssArg, 'test-author')
+
+    expect(mockGetImageUrl).toHaveBeenCalledTimes(2)
+    expect(result).toContain('<img src="mocked:https://example.com/a.png"/>')
+    expect(result).toContain('<img src="mocked:https://example.com/b.png"/>')
+  })
+
+  it('only media 模板应复用图片去重结果', async () => {
+    const processor = new RssItemProcessor({} as any, mockConfig, mockHttp)
+
+    const result = await processor.parseRssItem({
+      title: '媒体测试',
+      description: '<img src="https://example.com/a.png" /><img src="https://example.com/a.png" />',
+    }, {
+      template: 'only media',
+    } as rssArg, 'test-author')
+
+    expect(mockGetImageUrl).toHaveBeenCalledTimes(1)
+    expect(result).toBe('<img src="mocked:https://example.com/a.png"/>')
+  })
+
+  it('content 模板应只解析唯一图片一次并在重复位置正确回填', async () => {
+    const processor = new RssItemProcessor({} as any, mockConfig, mockHttp)
+
+    const result = await processor.parseRssItem({
+      title: '正文测试',
+      description: '前<img src="https://example.com/a.png"/>中<img src="https://example.com/a.png"/>后',
+    }, {
+      template: 'content',
+    } as rssArg, 'test-author')
+
+    expect(mockGetImageUrl).toHaveBeenCalledTimes(1)
+    expect(result.split('mocked:https://example.com/a.png')).toHaveLength(3)
+    expect(result).toContain('前')
+    expect(result).toContain('中')
+    expect(result).toContain('后')
   })
 })

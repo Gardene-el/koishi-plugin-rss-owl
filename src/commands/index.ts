@@ -438,3 +438,6 @@ function logCommandError(config: Config, error: any, scope: string, context?: Re
 
 export { registerSubscriptionManagementCommands } from './subscription-management'
 export { registerSubscriptionEditCommand } from './subscription-edit'
+export { registerSubscriptionCreateCommand } from './subscription-create'
+export { registerWebMonitorCommands } from './web-monitor'
+export { createCommandRuntimeDeps } from './runtime'

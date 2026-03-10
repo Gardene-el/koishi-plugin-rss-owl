@@ -1,9 +1,11 @@
 # koishi-plugin-rss-owl
 
 [![npm](https://img.shields.io/npm/v/@anyul/koishi-plugin-rss?style=flat-square)](https://www.npmjs.com/package/@anyul/koishi-plugin-rss)
-![version](https://img.shields.io/badge/version-5.0.0--beta-orange)
+![version](https://img.shields.io/badge/version-5.2.3-brightgreen)
 
 > 功能强大的 Koishi RSS 订阅插件，支持多种订阅源、图片渲染、AI 摘要等高级功能
+
+当前文档基于 `v5.2.3`，已同步命令模块化、入口装配层收敛与最新模板名称。
 
 ## ✨ 功能特性
 
@@ -32,19 +34,31 @@
 ```
 koishi-plugin-rss-owl/
 ├── src/
-│   ├── commands/           # 命令定义
-│   │   └── index.ts        # RSS 订阅命令
+│   ├── commands/           # 命令模块与运行时依赖
+│   │   ├── index.ts
+│   │   ├── runtime.ts
+│   │   ├── subscription-create.ts
+│   │   ├── subscription-edit.ts
+│   │   ├── subscription-management.ts
+│   │   └── web-monitor.ts
 │   ├── core/               # 核心功能模块
 │   │   ├── ai.ts          # AI 摘要功能
 │   │   ├── feeder.ts      # RSS 订阅调度
 │   │   ├── item-processor.ts  # RSS 条目处理
+│   │   ├── notification-queue.ts # 发送队列
 │   │   ├── parser.ts      # RSS/HTML 解析
-│   │   └── renderer.ts    # 图片渲染
-│   ├── utils/              # 工具函数
+│   │   ├── renderer.ts    # 图片渲染
+│   │   └── search.ts      # 联网搜索
+│   ├── services/           # 服务注册
+│   │   └── message-cache-service.ts
+│   ├── utils/              # 工具函数与共享基础设施
 │   │   ├── common.ts      # 通用工具
+│   │   ├── error-tracker.ts # 错误追踪
 │   │   ├── fetcher.ts     # HTTP 请求
 │   │   ├── logger.ts      # 日志系统
 │   │   ├── media.ts       # 媒体处理
+│   │   ├── message-cache.ts # 消息缓存
+│   │   ├── proxy.ts       # 代理配置 helper
 │   │   └── template.ts    # 模板定义
 │   ├── config.ts          # 配置定义
 │   ├── constants.ts       # 常量定义
@@ -52,9 +66,24 @@ koishi-plugin-rss-owl/
 │   ├── types.ts           # TypeScript 类型
 │   └── index.ts           # 插件入口
 ├── lib/                   # 编译输出
+├── tests/                 # Jest 测试与手工联调文件
+│   ├── unit/
+│   ├── integration/
+│   ├── manual/
+│   ├── setup.ts
+│   └── web-search.test.ts
+├── docs/                  # 开发记录与专题文档
 ├── package.json
 └── README.md
 ```
+
+### 当前架构概览
+
+- `src/index.ts` 现在只保留**插件装配与生命周期管理**。
+- `src/commands/*` 已按职责拆分为创建、管理、编辑、网页监控等独立模块。
+- `src/commands/runtime.ts` 统一提供命令共享依赖，减少命令文件间重复拼装。
+- `src/core/item-processor.ts` 统一模板选择、HTML 加载与图片资源回填逻辑。
+- `src/utils/proxy.ts` 统一 AI / 搜索等模块的代理配置。
 
 ### 配置插件
 
@@ -148,17 +177,17 @@ ai:
 
 ```bash
 # 关注订阅，更新时 @你
-rsso -f 早报网
+rsso.follow 1
 
 # 取消关注
-rsso -f 早报网
+rsso.follow 1
 ```
 
 ### 立即拉取
 
 ```bash
 # 立即拉取订阅最新内容
-rsso -p 早报网
+rsso.pull 1
 ```
 
 ## 📋 命令说明
@@ -184,6 +213,14 @@ rsso -p 早报网
 | `rsso.pull <id>` | 拉取最新内容 | `rsso.pull 1` |
 | `rsso.follow <id>` | 关注订阅 | `rsso.follow 1` |
 | `rsso.follow <id> --all` | 全员提醒 | `rsso.follow 1 --all` |
+
+### 运行管理命令
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `rsso.cache list [页数]` | 查看消息缓存列表 | `rsso.cache list`, `rsso.cache list 2` |
+| `rsso.cache pull <序号>` | 重新推送缓存消息 | `rsso.cache pull 1` |
+| `rsso.queue stats` | 查看发送队列统计 | `rsso.queue stats` |
 
 ### 修改订阅选项
 
@@ -240,25 +277,23 @@ rsso -a proxyAgent:false <url>
 
 ## 🎨 模板说明
 
-### 基础模板（直接发送）
+### 当前模板类型
 
-| 模板 | 说明 | 内容 |
-|------|------|------|
-| `content` | 自定义基础模板 | 文字+图片+视频 |
-| `text` | 纯文本 | 仅文字 |
-| `media` | 媒体内容 | 图片+视频 |
-| `image` | 仅图片 | 仅图片 |
-| `video` | 仅视频 | 仅视频 |
-| `proto` | 原始内容 | 未处理的 description |
+| 内部模板名 | 常用命令简写 | 说明 |
+|-----------|--------------|------|
+| `auto` | `auto` | 自动在轻量模板与渲染模板间选择 |
+| `content` | `content` | 基础内容模板，适合文字较少的订阅 |
+| `only text` | `text` | 仅发送文字 |
+| `only media` | `media` | 仅发送图片和视频 |
+| `only image` | `image` | 仅发送图片 |
+| `only video` | `video` | 仅发送视频 |
+| `proto` | `proto` | 直接输出原始 description |
+| `default` | `default` | 内置 Puppeteer 渲染模板 |
+| `only description` | `description` | 仅渲染 description 内容 |
+| `custom` | `custom` | 自定义 HTML 模板 |
+| `link` | `link` | 访问内容中的首个链接并渲染页面 |
 
-### Puppeteer 模板（图片渲染）
-
-| 模板 | 说明 | 特点 |
-|------|------|------|
-| `default` | 基础渲染模板 | 完整样式，包含标题、时间等 |
-| `description` | 纯内容渲染 | 仅包含 description 内容 |
-| `custom` | 自定义模板 | 高度可定制，支持自定义 HTML |
-| `link` | 链接访问渲染 | 访问 description 中的第一个链接并渲染 |
+> 说明：配置项与内部类型以 `only text / only media / only image / only video / only description` 为准，命令行中仍可使用 `text / media / image / video / description` 简写。
 
 ### 模板切换
 
@@ -614,7 +649,7 @@ debug: "details"  # 显示所有调试信息
 
 **1. 订阅不更新**
 - 检查刷新间隔设置
-- 使用 `rsso -p <id>` 手动拉取测试
+- 使用 `rsso.pull <id>` 手动拉取测试
 - 查看日志确认是否有错误
 
 **2. 图片不显示**
@@ -633,6 +668,16 @@ debug: "details"  # 显示所有调试信息
 - 使用 `debug: details` 查看代理日志
 
 ## 📜 更新日志
+
+### 5.2.3 (2026-03-10)
+
+#### 结构收敛与文档同步
+
+- 🧩 **入口装配层收敛** - `src/index.ts` 进一步压缩为装配层，命令注册与生命周期更清晰
+- 🗂️ **命令模块继续拆分** - 补齐 `runtime`、订阅创建、网页监控等命令模块结构
+- 🎨 **模板/渲染逻辑复用** - 统一模板处理与图片资源回填，减少重复分支
+- 🌐 **代理配置统一** - AI 与搜索模块改为共享代理 helper
+- 📚 **文档同步** - 更新模板名称、目录结构、开发与测试说明
 
 ### 5.0.4 (2026-02-17)
 
@@ -719,9 +764,6 @@ git clone https://github.com/Anyuluo996/koishi-plugin-rss-owl.git
 cd koishi-plugin-rss-owl
 npm install --legacy-peer-deps
 
-# 开发模式
-npm run dev
-
 # 构建
 npm run build
 
@@ -737,22 +779,25 @@ npm run test:watch
 
 ### 测试
 
-本项目拥有完善的测试套件，包含 165+ 个测试用例，覆盖核心功能模块。
+当前仓库包含 `unit`、`integration`、`manual` 三类测试/验证文件。
 
-**测试覆盖率**：
-- 语句覆盖率: 90.83%
-- 分支覆盖率: 74.86%
-- 函数覆盖率: 97.43%
-- 行覆盖率: 90.21%
+**推荐验证方式**：
+- `npm test`：运行默认 Jest 测试集
+- `npm run test:watch`：开发中持续回归
+- `npm run test:coverage`：需要覆盖率报告时执行
+- `npm run build`：执行 TypeScript 编译检查
 
 **测试范围**：
 - ✅ 工具函数测试（日期解析、URL处理、内容清理）
 - ✅ HTTP 请求测试（RequestManager、createHttpFunction）
 - ✅ 错误处理测试（友好错误消息、错误类型识别）
 - ✅ 日志系统测试（debug输出、级别过滤）
-- ✅ 集成测试（真实HTTP请求、代理配置）
+- ✅ 处理器/渲染逻辑测试（模板分支、图片回填、渲染边界）
+- ✅ 命令工具与代理配置测试
 
-详见 [TESTING.md](./TESTING.md) 了解更多测试信息。
+`tests/manual/` 中的文件主要用于手工联调，不作为默认自动化回归通过信号。
+
+详见 [docs/TESTING.md](./docs/TESTING.md) 了解更多测试信息。
 
 ## 💬 致谢
 

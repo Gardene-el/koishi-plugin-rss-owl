@@ -1,9 +1,9 @@
 import axios from 'axios'
-import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as cheerio from 'cheerio'
 import * as crypto from 'crypto'
 import { Config } from '../types'
 import { debug } from '../utils/logger'
+import { buildAxiosProxyConfig } from '../utils/proxy'
 import { webSearch, formatSearchResults, buildPromptWithSearchContext } from './search'
 import { normalizeSearchConfig } from '../config'
 
@@ -217,21 +217,6 @@ function cleanHtmlContent(contentHtml: string, maxLength: number): string {
 }
 
 /**
- * 构建代理配置
- */
-function buildProxyConfig(config: Config): any {
-  const requestConfig: any = {}
-
-  if (config.net.proxyAgent?.enabled) {
-    const proxyUrl = `${config.net.proxyAgent.protocol}://${config.net.proxyAgent.host}:${config.net.proxyAgent.port}`
-    requestConfig.httpsAgent = new HttpsProxyAgent(proxyUrl)
-    requestConfig.proxy = false
-  }
-
-  return requestConfig
-}
-
-/**
  * 调用 AI API 生成摘要（带智能降级）
  */
 async function callAiApi(
@@ -252,7 +237,7 @@ async function callAiApi(
           'Content-Type': 'application/json'
         },
         timeout: config.ai.timeout,
-        ...buildProxyConfig(config)
+        ...buildAxiosProxyConfig(config)
       }
 
       const response = await axios.post(
@@ -575,7 +560,7 @@ export async function generateSelectorByAI(
         'Content-Type': 'application/json'
       },
       timeout: 60000,
-      ...buildProxyConfig(config)
+      ...buildAxiosProxyConfig(config)
     }
 
     const response = await axios.post(
