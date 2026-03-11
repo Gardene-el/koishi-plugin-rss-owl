@@ -4,6 +4,7 @@ import { Config } from '../types'
 import { normalizeError } from '../utils/error-handler'
 import { trackError } from '../utils/error-tracker'
 import { createDebugWithContext } from '../utils/logger'
+import { isQueueDowngradeError } from './notification-queue-retry'
 import { QueueTask, QueueTaskContent } from './notification-queue-types'
 
 type QueueDebugFn = ReturnType<typeof createDebugWithContext>
@@ -13,6 +14,29 @@ interface NotificationQueueSenderDeps {
   config: Config
   createTaskDebug: (task: Partial<QueueTask>) => QueueDebugFn
   buildTaskLogContext: (task: Partial<QueueTask>) => Record<string, any>
+}
+
+export function downgradeQueueMessage(content: QueueTaskContent): QueueTaskContent {
+  if (content.isDowngraded) {
+    return {
+      ...content,
+      isDowngraded: true,
+    }
+  }
+
+  const downgradedMessage = content.message.replace(/<video[^>]*>.*?<\/video>/gis, (match: string) => {
+    const srcMatch = match.match(/src=["']([^"']+)["']/)
+    if (srcMatch) {
+      return `\n🎬 视频: ${srcMatch[1]}\n`
+    }
+    return '\n[视频不支持]\n'
+  })
+
+  return {
+    ...content,
+    message: downgradedMessage,
+    isDowngraded: true,
+  }
 }
 
 export class NotificationQueueSender {
@@ -27,11 +51,8 @@ export class NotificationQueueSender {
       await this.deps.ctx.broadcast([target], content.message)
       taskDebug(`消息发送成功: ${target}`, 'queue', 'details')
     } catch (sendError: any) {
-      const isOneBot1200 = sendError.code?.toString?.() === '1200' || sendError.message?.includes('1200')
-
-      if (isOneBot1200 && !content.isDowngraded) {
+      if (isQueueDowngradeError(sendError) && !content.isDowngraded) {
         taskDebug('检测到 OneBot 1200 错误，尝试降级处理', 'queue', 'info', { errorCode: '1200' })
-        throw { ...sendError, isMediaError: true, requiresDowngrade: true }
       }
 
       throw sendError
@@ -39,19 +60,7 @@ export class NotificationQueueSender {
   }
 
   async downgradeMessage(content: QueueTaskContent): Promise<QueueTaskContent> {
-    const downgradedMessage = content.message.replace(/<video[^>]*>.*?<\/video>/gis, (match: string) => {
-      const srcMatch = match.match(/src=["']([^"']+)["']/)
-      if (srcMatch) {
-        return `\n🎬 视频: ${srcMatch[1]}\n`
-      }
-      return '\n[视频不支持]\n'
-    })
-
-    return {
-      ...content,
-      message: downgradedMessage,
-      isDowngraded: true,
-    }
+    return downgradeQueueMessage(content)
   }
 
   async cacheMessage(task: QueueTask): Promise<void> {

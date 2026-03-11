@@ -19,6 +19,7 @@ import {
 } from './feeder-runtime'
 import { RssItemProcessor } from './item-processor'
 import { NotificationQueueManager, QueueTaskContent } from './notification-queue'
+import { getQueueRuntimeConfig } from './notification-queue-retry'
 
 export interface FeederDependencies {
   ctx: Context
@@ -51,6 +52,14 @@ function shouldSkipByInterval(rssItem: any, arg: rssArg, originalArg: Record<str
 
 async function persistSubscriptionState(ctx: Context, rssItemId: number, state: Record<string, any>): Promise<void> {
   await ctx.database.set(('rssOwl' as any), { id: rssItemId }, state)
+}
+
+function buildQueueUid(item: any, config: Config): string {
+  return String(
+    item?.link
+    || item?.guid
+    || JSON.stringify(getLastContent(item, config))
+  )
 }
 
 // ============ 主函数 ============
@@ -140,8 +149,8 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
 
       await queueManager.addTask({
         subscribeId: String(rssItem.id),
-        rssId: rssItem.rssId || rssItem.title,
-        uid: itemsToSend[0]?.link || itemsToSend[0]?.guid || `${Date.now()}`,
+        rssId: String(rssItem.rssId || rssItem.title),
+        uid: buildQueueUid(itemsToSend[0], config),
         guildId: rssItem.guildId,
         platform: rssItem.platform,
         content: taskContent,
@@ -170,6 +179,7 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
 export function startFeeder(ctx: Context, config: Config, $http: any, processor: RssItemProcessor, queueManager: NotificationQueueManager) {
   const deps = { ctx, config, $http, queueManager }
   const lifecycleDebug = createDebugWithContext(config, { lifecycle: 'feeder' })
+  const queueRuntimeConfig = getQueueRuntimeConfig(config)
 
   // Initial run
   feeder(deps, processor).catch(err => {
@@ -195,7 +205,7 @@ export function startFeeder(ctx: Context, config: Config, $http: any, processor:
 
   // 启动消费者定时器（处理发送队列）
   // 频率更高，确保消息快速发送
-  const queueProcessInterval = 30 * 1000 // 每 30 秒处理一次队列
+  const queueProcessInterval = queueRuntimeConfig.processIntervalSeconds * 1000
   queueInterval = setInterval(async () => {
     await queueManager.processQueue()
   }, queueProcessInterval)

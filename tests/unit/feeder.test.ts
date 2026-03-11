@@ -2,8 +2,8 @@
  * Feeder 生产者逻辑单元测试
  */
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals'
-import { feeder, mixinArg, formatArg, findRssItem, getLastContent } from '../../src/core/feeder'
+import { afterEach, describe, it, expect, beforeEach, jest } from '@jest/globals'
+import { feeder, mixinArg, formatArg, findRssItem, getLastContent, startFeeder, stopFeeder } from '../../src/core/feeder'
 import { Config, rssArg } from '../../src/types'
 import { RssItemProcessor } from '../../src/core/item-processor'
 import { NotificationQueueManager } from '../../src/core/notification-queue'
@@ -63,6 +63,11 @@ const mockQueueManager = {
 describe('Feeder - 生产者逻辑', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  afterEach(() => {
+    stopFeeder(mockConfig)
+    jest.restoreAllMocks()
   })
 
   describe('formatArg - 格式化参数', () => {
@@ -602,6 +607,35 @@ describe('Feeder - 生产者逻辑', () => {
         const descriptionChanged = JSON.stringify(oldItemMatch.description) !== JSON.stringify(currentContent.description)
         expect(descriptionChanged).toBe(true)
       }
+    })
+  })
+
+  describe('startFeeder - 定时器配置', () => {
+    it('应该使用 queue.processInterval 作为队列处理间隔', async () => {
+      const setIntervalSpy = jest.spyOn(global, 'setInterval')
+        .mockReturnValueOnce({} as any)
+        .mockReturnValueOnce({} as any)
+      const clearIntervalSpy = jest.spyOn(global, 'clearInterval').mockImplementation(() => undefined as any)
+
+      mockCtx.database.get.mockResolvedValue([])
+      mockQueueManager.processQueue.mockResolvedValue(undefined)
+
+      startFeeder(
+        mockCtx,
+        { ...mockConfig, queue: { processInterval: 15 } } as Config,
+        mock$http,
+        mockProcessor,
+        mockQueueManager as NotificationQueueManager,
+      )
+
+      await Promise.resolve()
+
+      expect(setIntervalSpy).toHaveBeenCalledTimes(2)
+      expect(setIntervalSpy.mock.calls[0][1]).toBe(600000)
+      expect(setIntervalSpy.mock.calls[1][1]).toBe(15000)
+
+      stopFeeder(mockConfig)
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(2)
     })
   })
 })

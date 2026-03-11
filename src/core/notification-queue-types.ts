@@ -35,6 +35,18 @@ export interface QueueTask {
 
 export type NewQueueTask = Omit<QueueTask, 'id' | 'status' | 'retryCount' | 'createdAt' | 'updatedAt'>
 
+export interface QueueTaskIdentity {
+  subscribeId: string
+  uid: string
+  guildId: string
+  platform: string
+}
+
+export interface QueueCreateResult {
+  task: QueueTask
+  created: boolean
+}
+
 export interface QueueStats {
   pending: number
   retry: number

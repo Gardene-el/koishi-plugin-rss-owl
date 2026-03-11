@@ -4,19 +4,29 @@ import { Config } from '../types'
 import { normalizeError } from '../utils/error-handler'
 import { trackError } from '../utils/error-tracker'
 import { createDebugWithContext, debug } from '../utils/logger'
-import { DEFAULT_QUEUE_BACKOFF_DELAYS, getRetryDelaySeconds, isFatalQueueError } from './notification-queue-retry'
+import {
+  classifyQueueError,
+  DEFAULT_QUEUE_BACKOFF_DELAYS,
+  getQueueRuntimeConfig,
+  getRetryDelaySeconds,
+  isFatalQueueError,
+  shouldStopRetrying,
+} from './notification-queue-retry'
 import { NotificationQueueSender } from './notification-queue-sender'
 import { NotificationQueueStore } from './notification-queue-store'
 import { NewQueueTask, QueueStats, QueueTask, QueueTaskContent } from './notification-queue-types'
 
-export type { QueueStatus, QueueTask, QueueTaskContent } from './notification-queue-types'
+export type { QueueStatus, QueueTask, QueueTaskContent, QueueTaskIdentity, QueueCreateResult } from './notification-queue-types'
 
 /**
  * 消息发送队列管理器
  */
 export class NotificationQueueManager {
   private processing = false
-  private batchSize = 10
+  private recovered = false
+  private batchSize: number
+  private maxRetries: number
+  private cleanupHours: number
 
   private store: NotificationQueueStore
   private sender: NotificationQueueSender
@@ -26,6 +36,10 @@ export class NotificationQueueManager {
     private ctx: Context,
     private config: Config,
   ) {
+    const runtimeConfig = getQueueRuntimeConfig(config)
+    this.batchSize = runtimeConfig.batchSize
+    this.maxRetries = runtimeConfig.maxRetries
+    this.cleanupHours = runtimeConfig.cleanupHours
     this.store = new NotificationQueueStore(ctx, this.batchSize)
     this.sender = new NotificationQueueSender({
       ctx,
@@ -64,10 +78,37 @@ export class NotificationQueueManager {
    * 添加任务到队列
    */
   async addTask(task: NewQueueTask): Promise<QueueTask> {
-    const queueTask = await this.store.createTask(task)
+    const { task: queueTask, created } = await this.store.createTask(task)
     const taskDebug = this.createTaskDebug(queueTask)
+
+    if (!created) {
+      taskDebug(`检测到重复任务，跳过入队: [${task.rssId}] ${task.content.title || task.uid}`, 'queue', 'info', {
+        duplicate: true,
+      })
+      return queueTask
+    }
+
     taskDebug(`任务已加入队列: [${task.rssId}] ${task.content.title}`, 'queue', 'info')
     return queueTask
+  }
+
+  isProcessing(): boolean {
+    return this.processing
+  }
+
+  private async ensureRecovered(): Promise<void> {
+    if (this.recovered) {
+      return
+    }
+
+    const recoveredCount = await this.store.recoverRetryTasksWithoutNextRetryTime()
+    this.recovered = true
+
+    if (recoveredCount > 0) {
+      debug(this.config, `已恢复 ${recoveredCount} 个缺少下次重试时间的任务`, 'queue', 'info', {
+        recoveredCount,
+      })
+    }
   }
 
   /**
@@ -81,6 +122,8 @@ export class NotificationQueueManager {
 
     this.processing = true
     try {
+      await this.ensureRecovered()
+
       const tasks = await this.store.getPendingTasks()
 
       if (tasks.length === 0) {
@@ -125,16 +168,17 @@ export class NotificationQueueManager {
    */
   private async handleSendError(task: QueueTask, error: any): Promise<void> {
     const taskDebug = this.createTaskDebug(task)
-    const normalizedError = normalizeError(error)
+    const classification = classifyQueueError(error, task.content)
+    const normalizedError = classification.normalizedError
     const errorMsg = normalizedError.message || 'Unknown error'
 
     trackError(normalizedError, {
       ...this.buildTaskLogContext(task),
       failReason: errorMsg,
-      requiresDowngrade: Boolean(error?.requiresDowngrade),
+      queueErrorAction: classification.action,
     })
 
-    if (this.isFatalError(error)) {
+    if (classification.action === 'FAILED') {
       await this.store.markTaskFailed(task.id!, errorMsg)
       taskDebug(`✗ 永久性失败，放弃重试: [${task.rssId}] ${task.content.title} - ${errorMsg}`, 'queue', 'error', {
         fatal: true,
@@ -143,11 +187,21 @@ export class NotificationQueueManager {
       return
     }
 
-    if (error.requiresDowngrade && !task.content.isDowngraded) {
+    if (classification.action === 'DOWNGRADE') {
       const downgradedContent = await this.downgradeMessage(task.content)
       await this.store.updateTaskForDowngrade(task, downgradedContent)
       taskDebug(`→ 消息已降级，立即重试: [${task.rssId}] ${task.content.title}`, 'queue', 'info', {
-        requiresDowngrade: true,
+        queueErrorAction: classification.action,
+      })
+      return
+    }
+
+    if (shouldStopRetrying(task.retryCount, this.maxRetries)) {
+      const maxRetryMessage = `超过最大重试次数(${this.maxRetries}): ${errorMsg}`
+      await this.store.markTaskFailed(task.id!, maxRetryMessage)
+      taskDebug(`✗ 已达到最大重试次数，任务失败: [${task.rssId}] ${task.content.title} - ${errorMsg}`, 'queue', 'error', {
+        maxRetries: this.maxRetries,
+        failReason: maxRetryMessage,
       })
       return
     }
@@ -200,12 +254,13 @@ export class NotificationQueueManager {
   /**
    * 清理旧的成功任务
    */
-  async cleanupSuccessTasks(olderThanHours: number = 24): Promise<number> {
-    const cleanupCount = await this.store.cleanupSuccessTasks(olderThanHours)
+  async cleanupSuccessTasks(olderThanHours?: number): Promise<number> {
+    const cleanupHours = olderThanHours ?? this.cleanupHours
+    const cleanupCount = await this.store.cleanupSuccessTasks(cleanupHours)
 
     debug(this.config, `已清理 ${cleanupCount} 个旧的成功任务`, 'queue', 'info', {
       cleanupCount,
-      olderThanHours,
+      olderThanHours: cleanupHours,
     })
 
     return cleanupCount

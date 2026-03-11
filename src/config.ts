@@ -169,6 +169,12 @@ export const Config: Schema<ConfigType> = Schema.object({
     enabled: Schema.boolean().description('启用消息缓存').default(true),
     maxSize: Schema.number().description('最大缓存消息条数').default(100),
   }).description('消息缓存设置'),
+  queue: Schema.object({
+    batchSize: Schema.number().min(1).max(50).description('每次处理发送队列的最大任务数').default(10),
+    maxRetries: Schema.number().min(0).max(20).description('临时错误的最大重试次数，超过后转为失败').default(5),
+    processInterval: Schema.number().min(5).max(3600).description('发送队列处理间隔（秒）').default(30),
+    cleanupHours: Schema.number().min(1).max(720).description('队列清理命令默认保留成功任务的小时数').default(24),
+  }).description('发送队列设置'),
   security: Schema.object({
     enabled: Schema.boolean().description('启用安全检查（建议开启）').default(false),
     allowInternalAccess: Schema.boolean().description('允许访问内网 IP 地址（如本地部署的 RSSHub）').default(false),

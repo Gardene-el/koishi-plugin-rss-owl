@@ -45,6 +45,7 @@ export interface Config {
   ai?: AiConfig
   search?: SearchConfig
   cache?: CacheConfig
+  queue?: QueueConfig
   security?: SecurityConfig
   debug?: "disable"|"error"|"info"|"details"
   logging?: LoggingConfig
@@ -192,6 +193,13 @@ export interface rssArg {
 export interface CacheConfig {
   enabled?: boolean
   maxSize?: number  // 最大缓存条数，默认 100
+}
+
+export interface QueueConfig {
+  batchSize?: number
+  maxRetries?: number
+  processInterval?: number
+  cleanupHours?: number
 }
 
 export interface LoggingConfig {

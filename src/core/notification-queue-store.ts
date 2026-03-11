@@ -1,6 +1,13 @@
 import { Context } from 'koishi'
 
-import { NewQueueTask, QueueStats, QueueTask, QueueTaskContent } from './notification-queue-types'
+import {
+  NewQueueTask,
+  QueueCreateResult,
+  QueueStats,
+  QueueTask,
+  QueueTaskContent,
+  QueueTaskIdentity,
+} from './notification-queue-types'
 
 export const RSS_NOTIFICATION_QUEUE_TABLE = 'rss_notification_queue'
 
@@ -10,7 +17,31 @@ export class NotificationQueueStore {
     private batchSize: number,
   ) { }
 
-  async createTask(task: NewQueueTask): Promise<QueueTask> {
+  async findTaskByIdentity(identity: QueueTaskIdentity): Promise<QueueTask | null> {
+    const tasks = await this.ctx.database.get((RSS_NOTIFICATION_QUEUE_TABLE as any), identity) as QueueTask[]
+
+    if (!tasks.length) {
+      return null
+    }
+
+    return [...tasks].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
+  }
+
+  async createTask(task: NewQueueTask): Promise<QueueCreateResult> {
+    const existingTask = await this.findTaskByIdentity({
+      subscribeId: task.subscribeId,
+      uid: task.uid,
+      guildId: task.guildId,
+      platform: task.platform,
+    })
+
+    if (existingTask) {
+      return {
+        task: existingTask,
+        created: false,
+      }
+    }
+
     const queueTask: QueueTask = {
       ...task,
       status: 'PENDING',
@@ -19,8 +50,15 @@ export class NotificationQueueStore {
       updatedAt: new Date(),
     }
 
-    await this.ctx.database.create((RSS_NOTIFICATION_QUEUE_TABLE as any), queueTask)
-    return queueTask
+    const createdTask = await this.ctx.database.create((RSS_NOTIFICATION_QUEUE_TABLE as any), queueTask) as Partial<QueueTask>
+
+    return {
+      task: {
+        ...queueTask,
+        ...createdTask,
+      },
+      created: true,
+    }
   }
 
   async getPendingTasks(): Promise<QueueTask[]> {
@@ -49,6 +87,8 @@ export class NotificationQueueStore {
   async markTaskSuccess(taskId: number): Promise<void> {
     await this.ctx.database.set((RSS_NOTIFICATION_QUEUE_TABLE as any), { id: taskId }, {
       status: 'SUCCESS',
+      nextRetryTime: null,
+      failReason: null,
       updatedAt: new Date(),
     })
   }
@@ -69,6 +109,7 @@ export class NotificationQueueStore {
       status: 'RETRY',
       nextRetryTime: new Date(),
       retryCount: (task.retryCount || 0) + 1,
+      failReason: null,
       updatedAt: new Date(),
     })
   }
@@ -76,9 +117,30 @@ export class NotificationQueueStore {
   async markTaskFailed(taskId: number, reason: string): Promise<void> {
     await this.ctx.database.set((RSS_NOTIFICATION_QUEUE_TABLE as any), { id: taskId }, {
       status: 'FAILED',
+      nextRetryTime: null,
       failReason: reason,
       updatedAt: new Date(),
     })
+  }
+
+  async recoverRetryTasksWithoutNextRetryTime(): Promise<number> {
+    const retryTasks = await this.ctx.database.get(
+      (RSS_NOTIFICATION_QUEUE_TABLE as any),
+      { status: 'RETRY' },
+      { limit: this.batchSize },
+    ) as QueueTask[]
+
+    const invalidTasks = retryTasks.filter(task => !task.nextRetryTime)
+
+    for (const task of invalidTasks) {
+      await this.ctx.database.set((RSS_NOTIFICATION_QUEUE_TABLE as any), { id: task.id }, {
+        status: 'RETRY',
+        nextRetryTime: new Date(),
+        updatedAt: new Date(),
+      })
+    }
+
+    return invalidTasks.length
   }
 
   async getStats(): Promise<QueueStats> {
@@ -101,6 +163,7 @@ export class NotificationQueueStore {
       await this.ctx.database.set((RSS_NOTIFICATION_QUEUE_TABLE as any), { id: task.id }, {
         status: 'PENDING',
         retryCount: 0,
+        nextRetryTime: null,
         failReason: null,
         updatedAt: new Date(),
       })
