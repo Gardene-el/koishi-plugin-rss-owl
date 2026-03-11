@@ -138,6 +138,22 @@ describe('logger', () => {
       expect(output).not.toContain('real-key')
     })
 
+    it('应该在文本日志中按字段过滤并格式化上下文', () => {
+      mockConfig.debug = 'info'
+      mockConfig.logging = {
+        contextFields: ['guildId', 'retry'],
+      }
+
+      debug(mockConfig, 'context message', 'test', 'info', {
+        retry: 2,
+        userId: 'user-1',
+        guildId: 'guild-1',
+      })
+
+      const output = String(infoSpy.mock.calls[0][0])
+      expect(output).toBe('[test] context message\n↳ guildId=guild-1, retry=2')
+    })
+
     it('应该允许关闭日志脱敏', () => {
       mockConfig.debug = 'info'
       mockConfig.logging = { sanitizeLogs: false }

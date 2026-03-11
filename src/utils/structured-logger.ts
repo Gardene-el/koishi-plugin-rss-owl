@@ -1,6 +1,9 @@
 /**
- * 结构化日志系统
- * 提供统一的日志格式，支持 JSON 输出和性能监控
+ * 观测辅助日志包装层。
+ *
+ * 注意：当前插件主流程日志入口是 `src/utils/logger.ts` 中的
+ * `debug / debugInfo / debugError / createDebugWithContext`。
+ * 这里保留为可选的观测与兼容包装，不应作为新业务代码的首选入口。
  */
 
 import { Config } from '../types'
@@ -82,7 +85,8 @@ export class PerformanceTimer {
 }
 
 /**
- * 结构化日志记录器类
+ * 结构化日志记录器类。
+ * 内部仍然回落到主日志入口，避免形成第二条日志主线。
  */
 export class StructuredLogger {
   private config: Config
@@ -108,42 +112,47 @@ export class StructuredLogger {
       return JSON.stringify(entry)
     }
 
-    // 文本格式
-    const parts = [
+    const header = [
       `[${entry.timestamp}]`,
       `[${entry.level.toUpperCase()}]`,
       entry.module ? `[${entry.module}]` : '',
       entry.message
     ].filter(Boolean).join(' ')
 
-    // 添加性能数据
-    if (entry.performance) {
-      const perfParts = []
-      if (entry.performance.duration) {
-        perfParts.push(`⏱️ ${entry.performance.duration}ms`)
-      }
-      if (entry.performance.memory) {
-        perfParts.push(`💾 ${entry.performance.memory.toFixed(2)}MB`)
-      }
-      if (perfParts.length > 0) {
-        return parts + '\n' + perfParts.join(' | ')
-      }
-    }
+    const lines = [header]
 
-    // 添加上下文数据
     if (entry.context && Object.keys(entry.context).length > 0) {
       const contextStr = Object.entries(entry.context)
         .map(([key, value]) => `${key}=${value}`)
         .join(', ')
-      return parts + `\n📍 ${contextStr}`
+      lines.push(`↳ context: ${contextStr}`)
     }
 
-    // 添加错误信息
+    if (entry.data && Object.keys(entry.data).length > 0) {
+      const dataStr = Object.entries(entry.data)
+        .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
+        .join(', ')
+      lines.push(`↳ data: ${dataStr}`)
+    }
+
+    if (entry.performance) {
+      const perfParts = []
+      if (entry.performance.duration) {
+        perfParts.push(`duration=${entry.performance.duration}ms`)
+      }
+      if (entry.performance.memory) {
+        perfParts.push(`memory=${entry.performance.memory.toFixed(2)}MB`)
+      }
+      if (perfParts.length > 0) {
+        lines.push(`↳ performance: ${perfParts.join(', ')}`)
+      }
+    }
+
     if (entry.error) {
-      return parts + `\n❌ ${entry.error.name}: ${entry.error.message}`
+      lines.push(`↳ error: ${entry.error.name}: ${entry.error.message}`)
     }
 
-    return parts
+    return lines.join('\n')
   }
 
   /**

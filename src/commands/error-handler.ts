@@ -3,9 +3,10 @@
  * 提供统一的错误处理和用户友好的错误消息
  */
 
-import { Context, Session } from 'koishi'
+import { Context } from 'koishi'
 import { Config } from '../types'
-import { getFriendlyErrorMessage } from '../utils/error-handler'
+import { getFriendlyErrorMessage, normalizeError } from '../utils/error-handler'
+import { trackError } from '../utils/error-tracker'
 import { debugError } from '../utils/logger'
 
 /**
@@ -72,7 +73,21 @@ export async function executeCommand(
  * 记录命令错误
  */
 function logError(config: Config, operation: string, error: any) {
-  debugError(config, error, operation)
+  const normalizedError = normalizeError(error, `${operation} failed`)
+  const context: Record<string, any> = {
+    command: operation,
+  }
+
+  if (error instanceof CommandError) {
+    context.commandErrorType = error.type
+  }
+
+  if (normalizedError && typeof (normalizedError as any).code === 'string') {
+    context.errorCode = (normalizedError as any).code
+  }
+
+  debugError(config, normalizedError, `${operation} error`, context)
+  trackError(normalizedError, context)
 }
 
 /**

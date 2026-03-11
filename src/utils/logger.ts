@@ -153,6 +153,69 @@ function emitLog(type: DebugLogType, content: string): void {
   logger.info(content)
 }
 
+function filterContextFields(
+  context: Record<string, any>,
+  contextFields?: string[]
+): Record<string, any> {
+  if (!contextFields?.length) {
+    return context
+  }
+
+  const filteredContext: Record<string, any> = {}
+  contextFields.forEach((field) => {
+    if (context[field] !== undefined) {
+      filteredContext[field] = context[field]
+    }
+  })
+  return filteredContext
+}
+
+function formatContextValue(value: any): string {
+  if (value instanceof Error) {
+    return value.message || value.name
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
+
+  return String(value)
+}
+
+function formatTextLog(
+  message: string,
+  name: string,
+  context: Record<string, any> | undefined,
+  loggingConfig: Config['logging']
+): string {
+  const parts: string[] = []
+  if (loggingConfig?.includeModule !== false && name) {
+    parts.push(`[${name}]`)
+  }
+  parts.push(message)
+
+  const textOutput = parts.filter(Boolean).join(' ').trim()
+  if (!context || Object.keys(context).length === 0) {
+    return textOutput
+  }
+
+  const filteredContext = filterContextFields(context, loggingConfig?.contextFields)
+  if (Object.keys(filteredContext).length === 0) {
+    return textOutput
+  }
+
+  const contextStr = Object.entries(filteredContext)
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .map(([key, value]) => `${key}=${formatContextValue(value)}`)
+    .join(', ')
+
+  return `${textOutput}\n↳ ${contextStr}`
+}
+
 /**
  * 增强的调试日志函数
  *
@@ -229,43 +292,16 @@ export function debug(
 
     // 添加上下文信息
     if (loggingConfig.includeContext && context) {
-      // 如果指定了 contextFields，只包含这些字段
-      if (loggingConfig.contextFields && loggingConfig.contextFields.length > 0) {
-        const filteredContext: Record<string, any> = {}
-        loggingConfig.contextFields.forEach(field => {
-          if (context[field] !== undefined) {
-            filteredContext[field] = context[field]
-          }
-        })
-        if (Object.keys(filteredContext).length > 0) {
-          logEntry.context = filteredContext
-        }
-      } else if (Object.keys(context).length > 0) {
-        // 否则包含所有上下文
-        logEntry.context = context
+      const filteredContext = filterContextFields(context, loggingConfig.contextFields)
+      if (Object.keys(filteredContext).length > 0) {
+        logEntry.context = filteredContext
       }
     }
 
     // 输出结构化日志
     emitLog(type, JSON.stringify(logEntry))
   } else {
-    // 传统文本格式
-    let textOutput = formattedMessage
-
-    // 添加模块前缀（如果有）
-    if (name) {
-      textOutput = `[${name}] ${textOutput}`
-    }
-
-    // 如果有上下文且不使用结构化日志，在末尾添加简化的上下文信息
-    if (context && Object.keys(context).length > 0) {
-      const contextStr = Object.entries(context)
-        .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
-        .join(' ')
-      textOutput += ` | ${contextStr}`
-    }
-
-    emitLog(type, textOutput)
+    emitLog(type, formatTextLog(formattedMessage, name, context, loggingConfig))
   }
 }
 
