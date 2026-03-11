@@ -1,4 +1,5 @@
 import { Config, rssArg } from '../types'
+import { normalizeBasicConfig, normalizeSubscriptionArg } from '../utils/legacy-config'
 import { debug } from '../utils/logger'
 
 const ARG_ENTRY_KEYS = [
@@ -240,7 +241,8 @@ export function formatArg(options: any, config: Config): rssArg {
  * @returns 合并后的运行时参数
  */
 export function mixinArg(arg: any, config: Config): rssArg {
-  const mergedProxy = mergeProxyAgentWithLog(arg?.proxyAgent, config.net?.proxyAgent, config)
+  const normalizedArg = normalizeSubscriptionArg(arg)
+  const mergedProxy = mergeProxyAgentWithLog(normalizedArg?.proxyAgent, config.net?.proxyAgent, config)
 
   if (mergedProxy?.enabled) {
     debug(config, `使用代理: ${mergedProxy.protocol}://${mergedProxy.host}:${mergedProxy.port}`, 'proxy merge', 'details')
@@ -248,18 +250,18 @@ export function mixinArg(arg: any, config: Config): rssArg {
     debug(config, '代理未启用', 'proxy merge', 'details')
   }
 
-  const baseConfig = {
+  const baseConfig = normalizeBasicConfig({
     ...config.basic,
-  }
+  })
 
-  const result = {
+  const result = normalizeSubscriptionArg({
     ...baseConfig,
-    ...arg,
-    filter: [...(config.msg?.keywordFilter || []), ...(arg?.filter || [])],
-    block: [...(config.msg?.keywordBlock || []), ...(arg?.block || [])],
-    template: arg.template ?? config.basic?.defaultTemplate,
+    ...normalizedArg,
+    filter: [...(config.msg?.keywordFilter || []), ...(normalizedArg?.filter || [])],
+    block: [...(config.msg?.keywordBlock || []), ...(normalizedArg?.block || [])],
+    template: normalizedArg.template ?? baseConfig.defaultTemplate,
     proxyAgent: mergedProxy,
-  }
+  })
 
   debug(config, `[DEBUG_PROXY] mixinArg return: ${JSON.stringify(result.proxyAgent)}`, 'mixin', 'details')
   return result as rssArg

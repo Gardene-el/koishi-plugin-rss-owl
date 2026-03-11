@@ -5,6 +5,7 @@ import { Config, rssArg } from '../types'
 import { parsePubDate, parseQuickUrl } from '../utils/common'
 import { normalizeError } from '../utils/error-handler'
 import { trackError } from '../utils/error-tracker'
+import { getResendUpdatedContent, shouldMergeVideo } from '../utils/legacy-config'
 import { createDebugWithContext } from '../utils/logger'
 import { RssItemProcessor } from './item-processor'
 import { getRssData } from './parser'
@@ -154,6 +155,7 @@ export function checkForUpdates(
   arg: rssArg,
   feedDebug: FeedDebugFn,
 ): { newItems: any[]; latestPubDate: Date; currentContent: any[] } {
+  const resendUpdatedContent = getResendUpdatedContent(config)
   let itemArray = items
     .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())
 
@@ -166,7 +168,7 @@ export function checkForUpdates(
 
   feedDebug(`${rssItem.title}: Latest item date=${lastPubDate.toISOString()}, DB date=${rssItem.lastPubDate ? new Date(rssItem.lastPubDate).toISOString() : 'none'}`, 'feeder', 'details')
 
-  const currentContent = config.basic?.resendUpdataContent === 'all'
+  const currentContent = resendUpdatedContent === 'all'
     ? itemArray.map((item: any) => getLastContent(item, config))
     : [getLastContent(latestItem, config)]
 
@@ -192,7 +194,7 @@ export function checkForUpdates(
         return true
       }
 
-      if (config.basic?.resendUpdataContent !== 'disable') {
+      if (resendUpdatedContent !== 'disable') {
         const newItemContent = getLastContent(item, config)
         const oldItemMatch = rssItem.lastContent?.itemArray?.find((old: any) =>
           (newItemContent.guid && old.guid === newItemContent.guid) ||
@@ -259,7 +261,7 @@ export async function generateMessages(
 export function buildFinalMessage(config: Config, messageList: string[], rssItem: any, arg: rssArg): string {
   let message = ''
   const shouldMerge = arg.merge === true || config.basic?.merge === '一直合并' || (config.basic?.merge === '有多条更新时合并' && messageList.length > 1)
-  const hasVideo = config.basic?.margeVideo && messageList.some(msg => /<video/.test(msg))
+  const hasVideo = shouldMergeVideo(config) && messageList.some(msg => /<video/.test(msg))
 
   if (shouldMerge || hasVideo) {
     message = `<message forward><author id="${rssItem.author}"/>${messageList.map(msg => `<message>${msg}</message>`).join('')}</message>`

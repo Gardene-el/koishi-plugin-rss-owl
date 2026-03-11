@@ -4,6 +4,7 @@ import { Config, rssArg } from '../types'
 import { parsePubDate } from '../utils/common'
 import { normalizeError } from '../utils/error-handler'
 import { trackError } from '../utils/error-tracker'
+import { getNextUpdateTime, normalizeSubscriptionArg, setNextUpdateTime } from '../utils/legacy-config'
 import { createDebugWithContext, debug } from '../utils/logger'
 import { formatArg, mixinArg } from './feeder-arg'
 import {
@@ -38,13 +39,14 @@ function shouldSkipByInterval(rssItem: any, arg: rssArg, originalArg: Record<str
   if (!rssItem.arg.interval) return false
 
   const now = Date.now()
-  if (arg.nextUpdataTime && arg.nextUpdataTime > now) return true
+  const nextUpdateTime = getNextUpdateTime(arg)
+  if (nextUpdateTime && nextUpdateTime > now) return true
 
-  if (arg.nextUpdataTime) {
-    const missed = Math.ceil((now - arg.nextUpdataTime) / arg.interval)
-    originalArg.nextUpdataTime = arg.nextUpdataTime + (arg.interval * (missed || 1))
+  if (nextUpdateTime) {
+    const missed = Math.ceil((now - nextUpdateTime) / arg.interval)
+    setNextUpdateTime(originalArg, nextUpdateTime + (arg.interval * (missed || 1)))
   } else {
-    originalArg.nextUpdataTime = now + arg.interval
+    setNextUpdateTime(originalArg, now + arg.interval)
   }
 
   return false
@@ -78,7 +80,7 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
       const feedDebug = createFeedDebug(config, rssItem)
       const arg: rssArg = mixinArg(rssItem.arg || {}, config)
       feedDebug(`[DEBUG_PROXY] feeder mixinArg result proxyAgent: ${JSON.stringify(arg.proxyAgent)}`, 'feeder', 'details')
-      const originalArg = clone(rssItem.arg || {})
+      const originalArg = normalizeSubscriptionArg(clone(rssItem.arg || {}))
 
       if (shouldSkipByInterval(rssItem, arg, originalArg)) continue
 

@@ -76,7 +76,8 @@ export interface CustomTemplateItem {
 
 export interface BasicConfig {
   usePoster: boolean;
-  margeVideo: boolean;
+  mergeVideo?: boolean
+  margeVideo?: boolean
   defaultTemplate?: TemplateType
   timeout?: number
   refresh?: number
@@ -84,7 +85,8 @@ export interface BasicConfig {
   maxRssItem?: number
   firstLoad?: boolean
   urlDeduplication?: boolean
-  resendUpdataContent: 'disable'|'latest'|'all'
+  resendUpdatedContent?: 'disable'|'latest'|'all'
+  resendUpdataContent?: 'disable'|'latest'|'all'
   imageMode?: 'base64' | 'File' | 'assets'
   videoMode?: 'filter'|'href'|'base64' | 'File' | 'assets'
   autoSplitImage?: boolean
@@ -179,7 +181,12 @@ export interface rssArg {
 
   split?:number
 
+  nextUpdateTime?: number
   nextUpdataTime?: number
+  mergeVideo?: boolean
+  margeVideo?: boolean
+  resendUpdatedContent?: 'disable'|'latest'|'all'
+  resendUpdataContent?: 'disable'|'latest'|'all'
 
   // HTML 监控相关字段
   type?: 'rss' | 'html'

@@ -4,9 +4,16 @@
 
 import { afterEach, describe, it, expect, beforeEach, jest } from '@jest/globals'
 import { feeder, mixinArg, formatArg, findRssItem, getLastContent, startFeeder, stopFeeder } from '../../src/core/feeder'
+import { getRssData } from '../../src/core/parser'
 import { Config, rssArg } from '../../src/types'
 import { RssItemProcessor } from '../../src/core/item-processor'
 import { NotificationQueueManager } from '../../src/core/notification-queue'
+
+jest.mock('../../src/core/parser', () => ({
+  getRssData: jest.fn(),
+}))
+
+const mockedGetRssData = getRssData as jest.MockedFunction<typeof getRssData>
 
 // Mock 依赖
 const mockCtx = {
@@ -26,10 +33,10 @@ const mockConfig: Config = {
     advancedAuthority: 4,
     imageMode: 'File',
     merge: '有多条更新时合并',
-    margeVideo: true,
+    mergeVideo: true,
     firstLoad: true,
     urlDeduplication: true,
-    resendUpdataContent: 'all',
+    resendUpdatedContent: 'all',
     defaultTemplate: 'auto',
     videoMode: 'href',
   },
@@ -63,6 +70,7 @@ const mockQueueManager = {
 describe('Feeder - 生产者逻辑', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockedGetRssData.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -270,6 +278,37 @@ describe('Feeder - 生产者逻辑', () => {
         port: 8080,
       })
     })
+
+    it('应该归一化新旧命名字段', () => {
+      const result = mixinArg({ nextUpdataTime: 123456 }, mockConfig) as any
+
+      expect(result.mergeVideo).toBe(true)
+      expect(result.margeVideo).toBe(true)
+      expect(result.resendUpdatedContent).toBe('all')
+      expect(result.resendUpdataContent).toBe('all')
+      expect(result.nextUpdateTime).toBe(123456)
+      expect(result.nextUpdataTime).toBe(123456)
+    })
+
+    it('应该兼容历史基础配置字段', () => {
+      const legacyConfig = {
+        ...mockConfig,
+        basic: {
+          ...mockConfig.basic,
+          mergeVideo: undefined,
+          resendUpdatedContent: undefined,
+          margeVideo: false,
+          resendUpdataContent: 'latest',
+        },
+      } as Config
+
+      const result = mixinArg({}, legacyConfig) as any
+
+      expect(result.mergeVideo).toBe(false)
+      expect(result.margeVideo).toBe(false)
+      expect(result.resendUpdatedContent).toBe('latest')
+      expect(result.resendUpdataContent).toBe('latest')
+    })
   })
 
   describe('findRssItem - 查找订阅', () => {
@@ -394,7 +433,7 @@ describe('Feeder - 生产者逻辑', () => {
           title: 'Test RSS',
           arg: {
             interval: 60000,
-            nextUpdataTime: Date.now() + 30000, // 30秒后
+            nextUpdateTime: Date.now() + 30000, // 30秒后
           },
           lastPubDate: new Date(),
           lastContent: [],
@@ -408,7 +447,29 @@ describe('Feeder - 生产者逻辑', () => {
       expect(mockQueueManager.addTask).not.toHaveBeenCalled()
     })
 
-    it('应该更新 nextUpdataTime', async () => {
+    it('应该兼容旧的 nextUpdataTime 字段', async () => {
+      const rssList = [
+        {
+          id: 1,
+          url: 'https://example.com/rss',
+          title: 'Test RSS',
+          arg: {
+            interval: 60000,
+            nextUpdataTime: Date.now() + 30000,
+          },
+          lastPubDate: new Date(),
+          lastContent: [],
+        },
+      ]
+
+      mockCtx.database.get.mockResolvedValueOnce(rssList)
+
+      await feeder({ ctx: mockCtx, config: mockConfig, $http: mock$http, queueManager: mockQueueManager }, mockProcessor)
+
+      expect(mockQueueManager.addTask).not.toHaveBeenCalled()
+    })
+
+    it('应该同步写回 nextUpdateTime 和 nextUpdataTime', async () => {
       const now = Date.now()
       const rssList = [
         {
@@ -417,7 +478,7 @@ describe('Feeder - 生产者逻辑', () => {
           title: 'Test RSS',
           arg: {
             interval: 60000,
-            nextUpdataTime: now - 30000, // 已过期
+            nextUpdateTime: now - 30000, // 已过期
           },
           lastPubDate: new Date(now - 60000),
           lastContent: [],
@@ -432,6 +493,7 @@ describe('Feeder - 生产者逻辑', () => {
 
       expect(mockCtx.database.set).toHaveBeenCalled()
       const updateCall = mockCtx.database.set.mock.calls[0]
+      expect(updateCall[2].arg.nextUpdateTime).toBeGreaterThan(now)
       expect(updateCall[2].arg.nextUpdataTime).toBeGreaterThan(now)
     })
 
@@ -449,14 +511,12 @@ describe('Feeder - 生产者逻辑', () => {
 
       mockCtx.database.get.mockResolvedValueOnce(rssList)
 
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+      mockedGetRssData.mockRejectedValueOnce(new Error('network error'))
 
       await feeder({ ctx: mockCtx, config: mockConfig, $http: mock$http, queueManager: mockQueueManager }, mockProcessor)
 
       // 应该继续处理，不抛出异常
       expect(mockQueueManager.addTask).not.toHaveBeenCalled()
-
-      consoleErrorSpy.mockRestore()
     })
   })
 
