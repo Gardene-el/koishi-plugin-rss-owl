@@ -29,6 +29,13 @@
 - **内容缓存** - 文件缓存管理，支持多种存储模式
 - **调试模式** - 详细的调试日志，方便问题排查
 
+## 📌 当前稳定性边界
+
+- 当前版本优先保障 **RSS / Atom / RSSHub 快速订阅主链路** 的可用性与回归覆盖。
+- **HTML / 网页监控** 目前仍属于基础能力，暂不作为当前版本的成熟度承诺重点。
+- 为保持兼容，运行时已支持规范命名 `mergeVideo` / `resendUpdatedContent` / `nextUpdateTime`。
+- 当前 **Koishi WebUI / Schema** 仍显示历史字段名 `margeVideo` / `resendUpdataContent`，这是兼容保留，不代表推荐命名方向。
+
 ## 📁 项目结构
 
 ```
@@ -604,6 +611,7 @@ plugins:
       content: ""                      # content 模板内容
 
     # === 基础配置 ===
+    # 当前 WebUI / Schema 里仍显示历史字段名，下面示例保持与配置界面一致
     basic:
       usePoster: false                 # 使用视频封面
       margeVideo: false                # 合并视频
@@ -636,6 +644,8 @@ plugins:
     # === 调试配置 ===
     debug: "info"                      # disable | error | info | details
 ```
+
+> 兼容说明：运行时内部已兼容 `mergeVideo` / `resendUpdatedContent` / `nextUpdateTime`；但当前 Koishi 配置 Schema 与 WebUI 仍展示历史字段名 `margeVideo` / `resendUpdataContent`，因此配置界面示例暂保持旧命名，避免和实际 UI 脱节。
 
 ## 🐛 调试指南
 
