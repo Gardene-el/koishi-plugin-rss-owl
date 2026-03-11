@@ -1,88 +1,51 @@
 export const usage = `
 <details>
-<summary>RSS-OWL 订阅器使用说明</summary>
+<summary>RSS-OWL 命令导航（发送 rsso 查看本帮助）</summary>
 
-## 基本命令:
-  rsso &lt;url&gt;              - 订阅RSS链接
-  rsso -l                 - 查看订阅列表
-  rsso -l [id]            - 查看订阅详情
-  rsso -r &lt;content&gt;       - 删除订阅(需要权限)
-  rsso -T &lt;url&gt;           - 测试订阅
-  rsso.ask &lt;url&gt; &lt;需求&gt;  - AI 智能订阅网页 (需要 AI 配置)
-  rsso.watch &lt;url&gt; [关键词] - 简单网页监控 (关键词/整页)
+## 新建 / 测试订阅:
+  rsso &lt;url&gt;                              - 创建 RSS / Atom / JSON Feed 订阅
+  rsso -T &lt;url&gt;                           - 测试抓取，不写入订阅
+  rsso &lt;url&gt; -t &lt;标题&gt;                    - 自定义订阅标题
+  rsso &lt;url&gt; -i &lt;模板&gt;                    - 指定消息模板
+  rsso &lt;url&gt; -a &lt;key:value,...&gt;          - 覆盖订阅参数
+  rsso &lt;url&gt; -d &lt;HH:mm[/数量]&gt;           - 每日定时推送
+  rsso &lt;url&gt; --target &lt;平台:频道&gt;         - 跨群 / 跨频道订阅（高级权限）
+  rsso -q [编号]                          - 查看快速订阅列表 / 详情
 
-## 常用选项:
-  -i &lt;template&gt;          - 设置消息模板
-      可选值: content(文字) | default(图片) | custom(自定义) | only text | only media 等
-  -t &lt;title&gt;             - 自定义订阅标题
-  -a &lt;arg&gt;               - 自定义配置 (格式: key:value,key2:value2)
-      例如: -a timeout:30,merge:true
+## 管理订阅（使用列表序号）:
+  rsso.list [id]                          - 查看订阅列表 / 详情
+  rsso.remove &lt;id&gt; [--all]               - 删除订阅 / 删除全部
+  rsso.pull &lt;id&gt;                         - 拉取订阅最新内容
+  rsso.follow &lt;id&gt; [--all]               - 关注订阅更新 / 全员提醒
+  rsso.edit &lt;id&gt; [选项]                  - 修改标题、URL、模板、选择器、目标
+  rsso.cache                             - 消息缓存管理
+  rsso.queue                             - 发送队列管理
 
-## 高级选项:
-  -f &lt;content&gt;           - 关注订阅，更新时提醒
-  -fAll &lt;content&gt;        - 全体关注(需要高级权限)
-  -target &lt;groupId&gt;      - 跨群订阅(需要高级权限)
-  -d &lt;time&gt;              - 定时推送 (格式: "HH:mm/数量" 或 "HH:mm")
-      例如: -d "08:00/5" 表示每天8点推送5条
-  -p &lt;id&gt;                - 手动拉取最新内容
+## 网页监控相关:
+  rsso.html &lt;url&gt; -s &lt;selector&gt;          - 使用 CSS 选择器监控网页
+  rsso.ask &lt;url&gt; &lt;需求&gt;                  - AI 生成选择器后创建网页订阅
+  rsso.watch &lt;url&gt; [关键词]              - 简单网页 / 关键词监控
 
-## 快速订阅:
-  rsso -q                - 查看快速订阅列表
-  rsso -q [编号]         - 查看快速订阅详情
-  rsso -T tg:channel_name  - 快速订阅Telegram频道
+## 常用模板:
+  content        - 纯文字正文
+  default        - 默认图片模板
+  custom         - 自定义模板
+  only text      - 仅文本
+  only image     - 仅图片
+  only media     - 图片 + 视频
+  link           - 跟随正文中的第一个链接
 
-## Assets 图片/视频服务配置 (推荐):
-  使用 assets 服务可以避免 Base64 超长问题
-  1. 在插件市场安装 assets-xxx 插件 (如 assets-local, assets-s3, assets-smms 等)
-  2. 在对应插件中配置存储信息 (AccessKey, Secret, Bucket 等)
-  3. 在 RSS-Owl 基础设置中将 imageMode/videoMode 设置为 'assets'
-  4. 插件会自动上传图片/视频到你的图床服务
+## 常用示例:
+  rsso https://example.com/rss
+  rsso -T tg:woshadiao
+  rsso https://example.com/rss -i content -t "示例订阅"
+  rsso.list
+  rsso.edit 1 -t "新标题"
+  rsso.html https://example.com -s ".news-item"
 
-## 配置示例:
-  rsso -T -i content "https://example.com/rss"
-  rsso "https://example.com/rss" -t "我的订阅" -a "timeout:60,merge:true"
-  rsso -d "09:00/3" "https://example.com/rss"
-
-</details>
-
-<details>
-<summary>网页监控 (rsso.html) - 监控任意网页元素变化</summary>
-
-使用 CSS 选择器监控网页元素变化，支持静态网页和 SPA 动态页面。
-
-## 基本用法:
-  rsso.html &lt;url&gt; -s &lt;selector&gt;      - 监控符合选择器的元素
-
-## 常用选项:
-  -s, --selector &lt;选择器&gt;    CSS 选择器 (必填)，例如: .news-item、#price、div.list > li
-  -t, --title &lt;标题&gt;         自定义订阅标题
-  -i, --template &lt;模板&gt;      消息模板 (推荐 content)
-  --text                     只提取纯文本 (默认提取 HTML)
-  -T, --test                 测试模式，查看抓取预览
-
-## Puppeteer 动态渲染 (解决 SPA/JS 动态内容):
-  -P, --puppeteer            使用 Puppeteer 渲染页面 (需要安装 koishi-plugin-puppeteer)
-  -w, --wait &lt;毫秒&gt;          渲染后等待时间
-  -W, --waitSelector &lt;选择器&gt;  等待特定元素出现
-
-</details>
-
-<details>
-<summary>AI 摘要 (ai) - 智能生成内容摘要</summary>
-
-使用 OpenAI 兼容 API 为订阅内容生成 AI 摘要。
-
-## 启用方法:
-  1. 在插件配置中开启 AI 功能
-  2. 填写 API Base URL、API Key 和模型名称
-
-## 配置项:
-  - placement           摘要位置: top (顶部) / bottom (底部)
-  - separator          分割线样式
-  - prompt             提示词模板 ({{title}} 标题, {{content}} 内容)
-  - maxInputLength     最大输入长度 (默认 2000 字)
-  - timeout            请求超时 (默认 30000 毫秒)
-
+## 兼容提示:
+  旧选项 -l / -r / -f / -p 仍会返回迁移提示，
+  建议改用 rsso.list / rsso.remove / rsso.follow / rsso.pull。
 
 </details>
 `
