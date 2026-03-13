@@ -81,7 +81,7 @@ async function prepareHtmlForRender(
     }).get())
   }
 
-  html('img').attr('style', 'object-fit:scale-down;max-width:100%;')
+  html('img').attr('style', 'object-fit:scale-down;max-width:100%;height:auto;')
   return useXml ? html.xml() : html.html()
 }
 
