@@ -1,16 +1,19 @@
-import { Context, clone } from 'koishi'
+import { Context, clone } from "koishi";
 
-import { quickList } from '../constants'
-import { Config, rssArg } from '../types'
-import { parsePubDate, parseQuickUrl } from '../utils/common'
-import { normalizeError } from '../utils/error-handler'
-import { trackError } from '../utils/error-tracker'
-import { getResendUpdatedContent, shouldMergeVideo } from '../utils/legacy-config'
-import { createDebugWithContext } from '../utils/logger'
-import { RssItemProcessor } from './item-processor'
-import { getRssData } from './parser'
+import { quickList } from "../constants";
+import { Config, rssArg } from "../types";
+import { parsePubDate, parseQuickUrl } from "../utils/common";
+import { normalizeError } from "../utils/error-handler";
+import { trackError } from "../utils/error-tracker";
+import {
+  getResendUpdatedContent,
+  shouldMergeVideo,
+} from "../utils/legacy-config";
+import { createDebugWithContext } from "../utils/logger";
+import { RssItemProcessor } from "./item-processor";
+import { getRssData } from "./parser";
 
-type FeedDebugFn = ReturnType<typeof createDebugWithContext>
+type FeedDebugFn = ReturnType<typeof createDebugWithContext>;
 
 /**
  * 构建订阅抓取日志上下文。
@@ -26,7 +29,7 @@ export function buildFeedLogContext(rssItem: any): Record<string, any> {
     url: rssItem.url,
     guildId: rssItem.guildId,
     platform: rssItem.platform,
-  }
+  };
 }
 
 /**
@@ -37,7 +40,7 @@ export function buildFeedLogContext(rssItem: any): Record<string, any> {
  * @returns 调试函数
  */
 export function createFeedDebug(config: Config, rssItem: any): FeedDebugFn {
-  return createDebugWithContext(config, buildFeedLogContext(rssItem))
+  return createDebugWithContext(config, buildFeedLogContext(rssItem));
 }
 
 /**
@@ -48,22 +51,23 @@ export function createFeedDebug(config: Config, rssItem: any): FeedDebugFn {
  * @returns 匹配到的订阅项
  */
 export function findRssItem(rssList: any[], keyword: number | string) {
-  if (typeof keyword === 'number' || /^\d+$/.test(String(keyword))) {
-    const listIndex = parseInt(String(keyword)) - 1
+  if (typeof keyword === "number" || /^\d+$/.test(String(keyword))) {
+    const listIndex = parseInt(String(keyword)) - 1;
     if (listIndex >= 0 && listIndex < rssList.length) {
-      return rssList[listIndex]
+      return rssList[listIndex];
     }
   }
 
-  const index = ((rssList.findIndex(i => i.rssId === +keyword) + 1) ||
-    (rssList.findIndex(i => i.url == keyword) + 1) ||
-    (rssList.findIndex(i => i.url.indexOf(keyword) + 1) + 1) ||
-    (rssList.findIndex(i => i.title.indexOf(keyword) + 1) + 1)) - 1
+  const index =
+    (rssList.findIndex((i) => i.rssId === +keyword) + 1 ||
+      rssList.findIndex((i) => i.url == keyword) + 1 ||
+      rssList.findIndex((i) => i.url.indexOf(keyword) + 1) + 1 ||
+      rssList.findIndex((i) => i.title.indexOf(keyword) + 1) + 1) - 1;
 
   if (index < 0 || index >= rssList.length) {
-    return undefined
+    return undefined;
   }
-  return rssList[index]
+  return rssList[index];
 }
 
 /**
@@ -74,52 +78,73 @@ export function findRssItem(rssList: any[], keyword: number | string) {
  * @returns 去重内容对象
  */
 export function getLastContent(item: any, _config: Config) {
-  const keys = ['title', 'description', 'link', 'guid']
-  const obj = Object.assign({}, ...keys.map(key => clone(item?.[key]) ? { [key]: item[key] } : {}))
-  return { ...obj, description: String(obj?.description).replaceAll(/\s/g, '') }
+  const keys = ["title", "description", "link", "guid"];
+  const obj = Object.assign(
+    {},
+    ...keys.map((key) => (clone(item?.[key]) ? { [key]: item[key] } : {})),
+  );
+  return {
+    ...obj,
+    description: String(obj?.description).replaceAll(/\s/g, ""),
+  };
 }
 
 function formatDebugDate(value: any): string {
-  const date = value instanceof Date ? value : new Date(value ?? 0)
-  return Number.isNaN(date.getTime()) ? 'invalid' : date.toISOString()
+  const date = value instanceof Date ? value : new Date(value ?? 0);
+  return Number.isNaN(date.getTime()) ? "invalid" : date.toISOString();
 }
 
 function getStoredTimestamp(value: any): number | undefined {
-  if (!value) return undefined
+  if (!value) return undefined;
 
-  const date = value instanceof Date ? value : new Date(value)
-  const timestamp = date.getTime()
+  const date = value instanceof Date ? value : new Date(value);
+  const timestamp = date.getTime();
 
-  return Number.isNaN(timestamp) ? undefined : timestamp
+  return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
-function resolveLastPublishedTime(config: Config, rssItem: any, itemArray: any[], feedDebug: FeedDebugFn): number {
-  const directTimestamp = getStoredTimestamp(rssItem.lastPubDate)
+function resolveLastPublishedTime(
+  config: Config,
+  rssItem: any,
+  itemArray: any[],
+  feedDebug: FeedDebugFn,
+): number {
+  const directTimestamp = getStoredTimestamp(rssItem.lastPubDate);
   if (directTimestamp !== undefined) {
-    return directTimestamp
+    return directTimestamp;
   }
 
-  const lastContentItems = rssItem.lastContent?.itemArray
+  const lastContentItems = rssItem.lastContent?.itemArray;
   if (!Array.isArray(lastContentItems) || lastContentItems.length === 0) {
-    return 0
+    return 0;
   }
 
-  const matchedItem = itemArray.find((item: any) => lastContentItems.some((old: any) =>
-    (old.guid && old.guid === item.guid)
-    || (old.link === item.link && old.title === item.title),
-  ))
+  const matchedItem = itemArray.find((item: any) =>
+    lastContentItems.some(
+      (old: any) =>
+        (old.guid && old.guid === item.guid) ||
+        (old.link === item.link && old.title === item.title),
+    ),
+  );
 
   if (!matchedItem) {
-    return 0
+    return 0;
   }
 
-  const recoveredTimestamp = parsePubDate(config, matchedItem.pubDate).getTime()
+  const recoveredTimestamp = parsePubDate(
+    config,
+    matchedItem.pubDate,
+  ).getTime();
   if (Number.isNaN(recoveredTimestamp)) {
-    return 0
+    return 0;
   }
 
-  feedDebug(`${rssItem.title}: Recovered invalid lastPubDate from lastContent as ${formatDebugDate(recoveredTimestamp)}`, 'feeder', 'info')
-  return recoveredTimestamp
+  feedDebug(
+    `${rssItem.title}: Recovered invalid lastPubDate from lastContent as ${formatDebugDate(recoveredTimestamp)}`,
+    "feeder",
+    "info",
+  );
+  return recoveredTimestamp;
 }
 
 /**
@@ -141,22 +166,33 @@ export async function fetchRssItems(
   arg: rssArg,
   feedDebug: FeedDebugFn,
 ): Promise<any[]> {
-  const rssHubUrl = config.msg?.rssHubUrl || 'https://hub.slarker.me'
+  const rssHubUrl = config.msg?.rssHubUrl || "https://hub.slarker.me";
 
   try {
-    const urls = rssItem.url.split('|').map((url: string) => parseQuickUrl(url, rssHubUrl, quickList))
-    const results = await Promise.all(urls.map(async (url: string) => await getRssData(ctx, config, $http, url, arg)))
-    return results.flat(1)
+    const urls = rssItem.url
+      .split("|")
+      .map((url: string) => parseQuickUrl(url, rssHubUrl, quickList));
+    const results = await Promise.all(
+      urls.map(
+        async (url: string) => await getRssData(ctx, config, $http, url, arg),
+      ),
+    );
+    return results.flat(1);
   } catch (error: any) {
-    const normalizedError = normalizeError(error)
-    feedDebug(`Fetch failed for ${rssItem.title}: ${normalizedError.message}`, 'feeder', 'error', {
-      stage: 'fetch',
-    })
+    const normalizedError = normalizeError(error);
+    feedDebug(
+      `Fetch failed for ${rssItem.title}: ${normalizedError.message}`,
+      "feeder",
+      "error",
+      {
+        stage: "fetch",
+      },
+    );
     trackError(normalizedError, {
       ...buildFeedLogContext(rssItem),
-      stage: 'fetch',
-    })
-    return []
+      stage: "fetch",
+    });
+    return [];
   }
 }
 
@@ -168,17 +204,27 @@ export async function fetchRssItems(
  * @param feedDebug - 调试函数
  * @returns 过滤后的条目列表
  */
-export function filterItems(items: any[], arg: rssArg, feedDebug: FeedDebugFn): any[] {
-  return items.filter(item => {
-    const matchKeyword = arg.filter?.find((keyword: string) =>
-      new RegExp(keyword, 'im').test(item.title) || new RegExp(keyword, 'im').test(item.description),
-    )
+export function filterItems(
+  items: any[],
+  arg: rssArg,
+  feedDebug: FeedDebugFn,
+): any[] {
+  return items.filter((item) => {
+    const matchKeyword = arg.filter?.find(
+      (keyword: string) =>
+        new RegExp(keyword, "im").test(item.title) ||
+        new RegExp(keyword, "im").test(item.description),
+    );
     if (matchKeyword) {
-      feedDebug(`filter:${matchKeyword}`, 'feeder', 'info', { matchedKeyword: matchKeyword })
-      feedDebug(item, 'filter rss item', 'info', { matchedKeyword: matchKeyword })
+      feedDebug(`filter:${matchKeyword}`, "feeder", "info", {
+        matchedKeyword: matchKeyword,
+      });
+      feedDebug(item, "filter rss item", "info", {
+        matchedKeyword: matchKeyword,
+      });
     }
-    return !matchKeyword
-  })
+    return !matchKeyword;
+  });
 }
 
 /**
@@ -198,75 +244,120 @@ export function checkForUpdates(
   arg: rssArg,
   feedDebug: FeedDebugFn,
 ): { newItems: any[]; latestPubDate: Date; currentContent: any[] } {
-  const resendUpdatedContent = getResendUpdatedContent(config)
-  let itemArray = items
-    .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())
+  const resendUpdatedContent = getResendUpdatedContent(config);
+  let itemArray = items.sort(
+    (a, b) =>
+      parsePubDate(config, b.pubDate).getTime() -
+      parsePubDate(config, a.pubDate).getTime(),
+  );
 
   if (itemArray.length === 0) {
-    return { newItems: [], latestPubDate: new Date(), currentContent: [] }
+    return { newItems: [], latestPubDate: new Date(), currentContent: [] };
   }
 
-  const latestItem = itemArray[0]
-  const lastPubDate = parsePubDate(config, latestItem.pubDate)
-  const lastTime = resolveLastPublishedTime(config, rssItem, itemArray, feedDebug)
+  const latestItem = itemArray[0];
+  const lastPubDate = parsePubDate(config, latestItem.pubDate);
+  const lastTime = resolveLastPublishedTime(
+    config,
+    rssItem,
+    itemArray,
+    feedDebug,
+  );
 
-  feedDebug(`${rssItem.title}: Latest item date=${formatDebugDate(lastPubDate)}, DB date=${rssItem.lastPubDate ? formatDebugDate(rssItem.lastPubDate) : 'none'}, baseline=${lastTime > 0 ? formatDebugDate(lastTime) : 'none'}`, 'feeder', 'details')
+  feedDebug(
+    `${rssItem.title}: Latest item date=${formatDebugDate(lastPubDate)}, DB date=${rssItem.lastPubDate ? formatDebugDate(rssItem.lastPubDate) : "none"}, baseline=${lastTime > 0 ? formatDebugDate(lastTime) : "none"}`,
+    "feeder",
+    "details",
+  );
 
-  const currentContent = resendUpdatedContent === 'all'
-    ? itemArray.map((item: any) => getLastContent(item, config))
-    : [getLastContent(latestItem, config)]
+  const currentContent =
+    resendUpdatedContent === "all"
+      ? itemArray.map((item: any) => getLastContent(item, config))
+      : [getLastContent(latestItem, config)];
 
   if (arg.reverse) {
-    itemArray = itemArray.reverse()
+    itemArray = itemArray.reverse();
   }
 
-  let rssItemArray: any[] = []
+  let rssItemArray: any[] = [];
 
   if (rssItem.arg.forceLength) {
-    rssItemArray = itemArray.slice(0, rssItem.arg.forceLength)
-    feedDebug(`${rssItem.title}: Force length mode, taking ${rssItemArray.length} items`, 'feeder', 'details')
+    rssItemArray = itemArray.slice(0, rssItem.arg.forceLength);
+    feedDebug(
+      `${rssItem.title}: Force length mode, taking ${rssItemArray.length} items`,
+      "feeder",
+      "details",
+    );
   } else {
-    feedDebug(`${rssItem.title}: Checking ${itemArray.length} items for updates`, 'feeder', 'details')
+    feedDebug(
+      `${rssItem.title}: Checking ${itemArray.length} items for updates`,
+      "feeder",
+      "details",
+    );
     rssItemArray = itemArray.filter((item, index) => {
-      const currentItemTime = parsePubDate(config, item.pubDate).getTime()
+      const currentItemTime = parsePubDate(config, item.pubDate).getTime();
 
-      feedDebug(`[${index}] ${item.title?.substring(0, 30)}: time=${formatDebugDate(currentItemTime)} > last=${formatDebugDate(lastTime)} ? ${currentItemTime > lastTime}`, 'feeder', 'details')
+      feedDebug(
+        `[${index}] ${item.title?.substring(0, 30)}: time=${formatDebugDate(currentItemTime)} > last=${formatDebugDate(lastTime)} ? ${currentItemTime > lastTime}`,
+        "feeder",
+        "details",
+      );
 
       if (currentItemTime > lastTime) {
-        feedDebug(`[${index}] ✓ Item is new (time check)`, 'feeder', 'details')
-        return true
+        feedDebug(`[${index}] ✓ Item is new (time check)`, "feeder", "details");
+        return true;
       }
 
-      if (resendUpdatedContent !== 'disable') {
-        const newItemContent = getLastContent(item, config)
-        const oldItemMatch = rssItem.lastContent?.itemArray?.find((old: any) =>
-          (newItemContent.guid && old.guid === newItemContent.guid) ||
-          (old.link === newItemContent.link && old.title === newItemContent.title),
-        )
+      if (resendUpdatedContent !== "disable") {
+        const newItemContent = getLastContent(item, config);
+        const oldItemMatch = rssItem.lastContent?.itemArray?.find(
+          (old: any) =>
+            (newItemContent.guid && old.guid === newItemContent.guid) ||
+            (old.link === newItemContent.link &&
+              old.title === newItemContent.title),
+        );
 
         if (oldItemMatch) {
-          const descriptionChanged = JSON.stringify(oldItemMatch.description) !== JSON.stringify(newItemContent.description)
+          const descriptionChanged =
+            JSON.stringify(oldItemMatch.description) !==
+            JSON.stringify(newItemContent.description);
           if (descriptionChanged) {
-            feedDebug(`[${index}] ✓ Item is updated (content changed)`, 'feeder', 'details')
+            feedDebug(
+              `[${index}] ✓ Item is updated (content changed)`,
+              "feeder",
+              "details",
+            );
           } else {
-            feedDebug(`[${index}] ✗ Item filtered (already sent)`, 'feeder', 'details')
+            feedDebug(
+              `[${index}] ✗ Item filtered (already sent)`,
+              "feeder",
+              "details",
+            );
           }
-          return descriptionChanged
+          return descriptionChanged;
         }
 
-        feedDebug(`[${index}] ✗ Item filtered (no match in lastContent)`, 'feeder', 'details')
+        feedDebug(
+          `[${index}] ✗ Item filtered (no match in lastContent)`,
+          "feeder",
+          "details",
+        );
       }
 
-      feedDebug(`[${index}] ✗ Item filtered (failed all checks)`, 'feeder', 'details')
-      return false
-    })
+      feedDebug(
+        `[${index}] ✗ Item filtered (failed all checks)`,
+        "feeder",
+        "details",
+      );
+      return false;
+    });
 
     if (arg.maxRssItem) {
-      rssItemArray = rssItemArray.slice(0, arg.maxRssItem)
+      rssItemArray = rssItemArray.slice(0, arg.maxRssItem);
     }
   }
 
-  return { newItems: rssItemArray, latestPubDate: lastPubDate, currentContent }
+  return { newItems: rssItemArray, latestPubDate: lastPubDate, currentContent };
 }
 
 /**
@@ -284,12 +375,21 @@ export async function generateMessages(
   rssItem: any,
   arg: rssArg,
 ): Promise<{ messageList: string[]; itemsToSend: any[] }> {
-  const itemsToSend = [...items].reverse()
-  const messageList = (await Promise.all(
-    itemsToSend.map(async item => await processor.parseRssItem(item, { ...rssItem, ...arg }, rssItem.author)),
-  )).filter(message => message)
+  const itemsToSend = [...items].reverse();
+  const messageList = (
+    await Promise.all(
+      itemsToSend.map(
+        async (item) =>
+          await processor.parseRssItem(
+            item,
+            { ...rssItem, ...arg },
+            rssItem.author,
+          ),
+      ),
+    )
+  ).filter((message) => message);
 
-  return { messageList, itemsToSend }
+  return { messageList, itemsToSend };
 }
 
 /**
@@ -301,21 +401,34 @@ export async function generateMessages(
  * @param arg - 运行时参数
  * @returns 最终发送消息
  */
-export function buildFinalMessage(config: Config, messageList: string[], rssItem: any, arg: rssArg): string {
-  let message = ''
-  const shouldMerge = arg.merge === true || config.basic?.merge === '一直合并' || (config.basic?.merge === '有多条更新时合并' && messageList.length > 1)
-  const hasVideo = shouldMergeVideo(config) && messageList.some(msg => /<video/.test(msg))
+export function buildFinalMessage(
+  config: Config,
+  messageList: string[],
+  rssItem: any,
+  arg: rssArg,
+): string {
+  let message = "";
+  const shouldMerge =
+    arg.merge === true ||
+    config.basic?.merge === "一直合并" ||
+    (config.basic?.merge === "有多条更新时合并" && messageList.length > 1);
+  const hasVideo =
+    shouldMergeVideo(config) && messageList.some((msg) => /<video/.test(msg));
 
   if (shouldMerge || hasVideo) {
-    message = `<message forward><author id="${rssItem.author}"/>${messageList.map(msg => `<message>${msg}</message>`).join('')}</message>`
+    message = `<message forward><author id="${rssItem.author}"/>${messageList.map((msg) => `<message>${msg}</message>`).join("")}</message>`;
   } else {
-    message = messageList.join('')
+    message = messageList.join("");
   }
 
   if (rssItem.followers && rssItem.followers.length > 0) {
-    const mentions = rssItem.followers.map((id: string) => `<at ${id === 'all' ? 'type="all"' : `id="${id}"`}/>`).join(' ')
-    message += `<message>${mentions}</message>`
+    const mentions = rssItem.followers
+      .map(
+        (id: string) => `<at ${id === "all" ? 'type="all"' : `id="${id}"`}/>`,
+      )
+      .join(" ");
+    message += `<message>${mentions}</message>`;
   }
 
-  return message
+  return message;
 }

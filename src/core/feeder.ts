@@ -1,12 +1,16 @@
-import { Context, clone } from 'koishi'
+import { Context, clone } from "koishi";
 
-import { Config, rssArg } from '../types'
-import { parsePubDate } from '../utils/common'
-import { normalizeError } from '../utils/error-handler'
-import { trackError } from '../utils/error-tracker'
-import { getNextUpdateTime, normalizeSubscriptionArg, setNextUpdateTime } from '../utils/legacy-config'
-import { createDebugWithContext, debug } from '../utils/logger'
-import { formatArg, mixinArg } from './feeder-arg'
+import { Config, rssArg } from "../types";
+import { parsePubDate } from "../utils/common";
+import { normalizeError } from "../utils/error-handler";
+import { trackError } from "../utils/error-tracker";
+import {
+  getNextUpdateTime,
+  normalizeSubscriptionArg,
+  setNextUpdateTime,
+} from "../utils/legacy-config";
+import { createDebugWithContext, debug } from "../utils/logger";
+import { formatArg, mixinArg } from "./feeder-arg";
 import {
   buildFeedLogContext,
   buildFinalMessage,
@@ -17,51 +21,63 @@ import {
   findRssItem,
   generateMessages,
   getLastContent,
-} from './feeder-runtime'
-import { RssItemProcessor } from './item-processor'
-import { NotificationQueueManager, QueueTaskContent } from './notification-queue'
-import { getQueueRuntimeConfig } from './notification-queue-retry'
+} from "./feeder-runtime";
+import { RssItemProcessor } from "./item-processor";
+import {
+  NotificationQueueManager,
+  QueueTaskContent,
+} from "./notification-queue";
+import { getQueueRuntimeConfig } from "./notification-queue-retry";
 
 export interface FeederDependencies {
-  ctx: Context
-  config: Config
-  $http: any
-  queueManager: NotificationQueueManager
+  ctx: Context;
+  config: Config;
+  $http: any;
+  queueManager: NotificationQueueManager;
 }
 
-export { formatArg, mixinArg } from './feeder-arg'
-export { findRssItem, getLastContent } from './feeder-runtime'
+export { formatArg, mixinArg } from "./feeder-arg";
+export { findRssItem, getLastContent } from "./feeder-runtime";
 
-let interval: any = null
-let queueInterval: any = null
+let interval: any = null;
+let queueInterval: any = null;
 
-function shouldSkipByInterval(rssItem: any, arg: rssArg, originalArg: Record<string, any>): boolean {
-  if (!rssItem.arg.interval) return false
+function shouldSkipByInterval(
+  rssItem: any,
+  arg: rssArg,
+  originalArg: Record<string, any>,
+): boolean {
+  if (!rssItem.arg.interval) return false;
 
-  const now = Date.now()
-  const nextUpdateTime = getNextUpdateTime(arg)
-  if (nextUpdateTime && nextUpdateTime > now) return true
+  const now = Date.now();
+  const nextUpdateTime = getNextUpdateTime(arg);
+  if (nextUpdateTime && nextUpdateTime > now) return true;
 
   if (nextUpdateTime) {
-    const missed = Math.ceil((now - nextUpdateTime) / arg.interval)
-    setNextUpdateTime(originalArg, nextUpdateTime + (arg.interval * (missed || 1)))
+    const missed = Math.ceil((now - nextUpdateTime) / arg.interval);
+    setNextUpdateTime(
+      originalArg,
+      nextUpdateTime + arg.interval * (missed || 1),
+    );
   } else {
-    setNextUpdateTime(originalArg, now + arg.interval)
+    setNextUpdateTime(originalArg, now + arg.interval);
   }
 
-  return false
+  return false;
 }
 
-async function persistSubscriptionState(ctx: Context, rssItemId: number, state: Record<string, any>): Promise<void> {
-  await ctx.database.set(('rssOwl' as any), { id: rssItemId }, state)
+async function persistSubscriptionState(
+  ctx: Context,
+  rssItemId: number,
+  state: Record<string, any>,
+): Promise<void> {
+  await ctx.database.set("rssOwl" as any, { id: rssItemId }, state);
 }
 
 function buildQueueUid(item: any, config: Config): string {
   return String(
-    item?.link
-    || item?.guid
-    || JSON.stringify(getLastContent(item, config))
-  )
+    item?.link || item?.guid || JSON.stringify(getLastContent(item, config)),
+  );
 }
 
 // ============ 主函数 ============
@@ -69,74 +85,124 @@ function buildQueueUid(item: any, config: Config): string {
 /**
  * 生产者：抓取 RSS，发现新消息，存入队列
  */
-export async function feeder(deps: FeederDependencies, processor: RssItemProcessor) {
-  const { ctx, config, $http, queueManager } = deps
+export async function feeder(
+  deps: FeederDependencies,
+  processor: RssItemProcessor,
+) {
+  const { ctx, config, $http, queueManager } = deps;
 
-  const rssList = await ctx.database.get(('rssOwl' as any), {})
-  if (!rssList || rssList.length === 0) return
+  const rssList = await ctx.database.get("rssOwl" as any, {});
+  if (!rssList || rssList.length === 0) return;
 
   for (const rssItem of rssList) {
     try {
-      const feedDebug = createFeedDebug(config, rssItem)
-      const arg: rssArg = mixinArg(rssItem.arg || {}, config)
-      feedDebug(`[DEBUG_PROXY] feeder mixinArg result proxyAgent: ${JSON.stringify(arg.proxyAgent)}`, 'feeder', 'details')
-      const originalArg = normalizeSubscriptionArg(clone(rssItem.arg || {}))
+      const feedDebug = createFeedDebug(config, rssItem);
+      const arg: rssArg = mixinArg(rssItem.arg || {}, config);
+      feedDebug(
+        `[DEBUG_PROXY] feeder mixinArg result proxyAgent: ${JSON.stringify(arg.proxyAgent)}`,
+        "feeder",
+        "details",
+      );
+      const originalArg = normalizeSubscriptionArg(clone(rssItem.arg || {}));
 
-      if (shouldSkipByInterval(rssItem, arg, originalArg)) continue
+      if (shouldSkipByInterval(rssItem, arg, originalArg)) continue;
 
-      const rssItemList = await fetchRssItems(ctx, config, $http, rssItem, arg, feedDebug)
+      const rssItemList = await fetchRssItems(
+        ctx,
+        config,
+        $http,
+        rssItem,
+        arg,
+        feedDebug,
+      );
       if (rssItemList.length === 0) {
         await persistSubscriptionState(ctx, rssItem.id, {
           lastPubDate: rssItem.lastPubDate,
           arg: originalArg,
           lastContent: rssItem.lastContent || { itemArray: [] },
-        })
-        continue
+        });
+        continue;
       }
 
-      const filteredItems = filterItems(rssItemList, arg, feedDebug)
+      const filteredItems = filterItems(rssItemList, arg, feedDebug);
       if (filteredItems.length === 0) {
-        const latestItem = [...rssItemList]
-          .sort((a, b) => parsePubDate(config, b.pubDate).getTime() - parsePubDate(config, a.pubDate).getTime())[0]
+        const latestItem = [...rssItemList].sort(
+          (a, b) =>
+            parsePubDate(config, b.pubDate).getTime() -
+            parsePubDate(config, a.pubDate).getTime(),
+        )[0];
 
         await persistSubscriptionState(ctx, rssItem.id, {
-          lastPubDate: latestItem ? parsePubDate(config, latestItem.pubDate) : rssItem.lastPubDate,
+          lastPubDate: latestItem
+            ? parsePubDate(config, latestItem.pubDate)
+            : rssItem.lastPubDate,
           arg: originalArg,
           lastContent: latestItem
             ? { itemArray: [getLastContent(latestItem, config)] }
-            : (rssItem.lastContent || { itemArray: [] }),
-        })
-        continue
+            : rssItem.lastContent || { itemArray: [] },
+        });
+        continue;
       }
 
-      const { newItems, latestPubDate, currentContent } = checkForUpdates(config, rssItem, filteredItems, arg, feedDebug)
+      const { newItems, latestPubDate, currentContent } = checkForUpdates(
+        config,
+        rssItem,
+        filteredItems,
+        arg,
+        feedDebug,
+      );
 
       if (newItems.length === 0) {
-        feedDebug(`${rssItem.title}: No new items found after filtering`, 'feeder', 'info', { newItemCount: 0 })
+        feedDebug(
+          `${rssItem.title}: No new items found after filtering`,
+          "feeder",
+          "info",
+          { newItemCount: 0 },
+        );
         await persistSubscriptionState(ctx, rssItem.id, {
           lastPubDate: latestPubDate,
           arg: originalArg,
           lastContent: { itemArray: currentContent },
-        })
-        continue
+        });
+        continue;
       }
 
-      feedDebug(`${rssItem.title}: Found ${newItems.length} new items`, 'feeder', 'info', { newItemCount: newItems.length })
-      feedDebug(newItems.map(i => i.title), 'feeder', 'info', { newItemCount: newItems.length })
+      feedDebug(
+        `${rssItem.title}: Found ${newItems.length} new items`,
+        "feeder",
+        "info",
+        { newItemCount: newItems.length },
+      );
+      feedDebug(
+        newItems.map((i) => i.title),
+        "feeder",
+        "info",
+        { newItemCount: newItems.length },
+      );
 
-      const { messageList, itemsToSend } = await generateMessages(processor, newItems, rssItem, arg)
+      const { messageList, itemsToSend } = await generateMessages(
+        processor,
+        newItems,
+        rssItem,
+        arg,
+      );
 
       if (messageList.length === 0) {
-        feedDebug(`${rssItem.title}: Items found but parsed to empty messages`, 'feeder', 'info', { newItemCount: newItems.length })
+        feedDebug(
+          `${rssItem.title}: Items found but parsed to empty messages`,
+          "feeder",
+          "info",
+          { newItemCount: newItems.length },
+        );
         await persistSubscriptionState(ctx, rssItem.id, {
           lastPubDate: latestPubDate,
           arg: originalArg,
           lastContent: { itemArray: currentContent },
-        })
-        continue
+        });
+        continue;
       }
 
-      const message = buildFinalMessage(config, messageList, rssItem, arg)
+      const message = buildFinalMessage(config, messageList, rssItem, arg);
 
       const taskContent: QueueTaskContent = {
         message,
@@ -147,7 +213,7 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
         link: itemsToSend[0]?.link,
         pubDate: parsePubDate(config, itemsToSend[0]?.pubDate),
         imageUrl: itemsToSend[0]?.enclosure?.url,
-      }
+      };
 
       await queueManager.addTask({
         subscribeId: String(rssItem.id),
@@ -156,93 +222,118 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
         guildId: rssItem.guildId,
         platform: rssItem.platform,
         content: taskContent,
-      })
+      });
 
-      feedDebug(`✓ 已添加到发送队列: ${rssItem.title}`, 'feeder', 'info', {
+      feedDebug(`✓ 已添加到发送队列: ${rssItem.title}`, "feeder", "info", {
         queuedItemTitle: itemsToSend[0]?.title,
-      })
+      });
 
       await persistSubscriptionState(ctx, rssItem.id, {
         lastPubDate: latestPubDate,
         arg: originalArg,
         lastContent: { itemArray: currentContent },
-      })
-
+      });
     } catch (err: any) {
-      const normalizedError = normalizeError(err)
-      const feedContext = buildFeedLogContext(rssItem)
-      const errorStack = normalizedError.stack || err?.stack
+      const normalizedError = normalizeError(err);
+      const feedContext = buildFeedLogContext(rssItem);
+      const errorStack = normalizedError.stack || err?.stack;
 
-      debug(config, `Feeder error for ${rssItem.url}: ${normalizedError.message}${errorStack ? `\n${errorStack}` : ''}`, 'feeder', 'error', feedContext)
-      trackError(normalizedError, feedContext)
+      debug(
+        config,
+        `Feeder error for ${rssItem.url}: ${normalizedError.message}${errorStack ? `\n${errorStack}` : ""}`,
+        "feeder",
+        "error",
+        feedContext,
+      );
+      trackError(normalizedError, feedContext);
     }
   }
 }
 
-export function startFeeder(ctx: Context, config: Config, $http: any, processor: RssItemProcessor, queueManager: NotificationQueueManager) {
-  const deps = { ctx, config, $http, queueManager }
-  const lifecycleDebug = createDebugWithContext(config, { lifecycle: 'feeder' })
-  const queueRuntimeConfig = getQueueRuntimeConfig(config)
+export function startFeeder(
+  ctx: Context,
+  config: Config,
+  $http: any,
+  processor: RssItemProcessor,
+  queueManager: NotificationQueueManager,
+) {
+  const deps = { ctx, config, $http, queueManager };
+  const lifecycleDebug = createDebugWithContext(config, {
+    lifecycle: "feeder",
+  });
+  const queueRuntimeConfig = getQueueRuntimeConfig(config);
 
   // Initial run
-  feeder(deps, processor).catch(err => {
-    const normalizedError = normalizeError(err)
-    lifecycleDebug(`Initial feeder run failed: ${normalizedError.message}`, 'feeder', 'error', {
-      operation: 'initial-feeder-run',
-    })
+  feeder(deps, processor).catch((err) => {
+    const normalizedError = normalizeError(err);
+    lifecycleDebug(
+      `Initial feeder run failed: ${normalizedError.message}`,
+      "feeder",
+      "error",
+      {
+        operation: "initial-feeder-run",
+      },
+    );
     trackError(normalizedError, {
-      lifecycle: 'feeder',
-      operation: 'initial-feeder-run',
-    })
-  })
+      lifecycle: "feeder",
+      operation: "initial-feeder-run",
+    });
+  });
 
   // 启动生产者定时器（抓取 RSS）
-  const refreshInterval = (config.basic?.refresh || 600) * 1000
+  const refreshInterval = (config.basic?.refresh || 600) * 1000;
   interval = setInterval(async () => {
-    if (config.basic?.imageMode === 'File') {
-      const { delCache } = await import('../utils/media')
-      await delCache(config)
+    if (config.basic?.imageMode === "File") {
+      const { delCache } = await import("../utils/media");
+      await delCache(config);
     }
-    await feeder(deps, processor)
-  }, refreshInterval)
+    await feeder(deps, processor);
+  }, refreshInterval);
 
   // 启动消费者定时器（处理发送队列）
   // 频率更高，确保消息快速发送
-  const queueProcessInterval = queueRuntimeConfig.processIntervalSeconds * 1000
+  const queueProcessInterval = queueRuntimeConfig.processIntervalSeconds * 1000;
   queueInterval = setInterval(async () => {
-    await queueManager.processQueue()
-  }, queueProcessInterval)
+    await queueManager.processQueue();
+  }, queueProcessInterval);
 
   // 立即处理一次队列（启动时）
-  queueManager.processQueue().catch(err => {
-    const normalizedError = normalizeError(err)
-    lifecycleDebug(`Initial queue processing failed: ${normalizedError.message}`, 'queue', 'error', {
-      operation: 'initial-queue-processing',
-    })
+  queueManager.processQueue().catch((err) => {
+    const normalizedError = normalizeError(err);
+    lifecycleDebug(
+      `Initial queue processing failed: ${normalizedError.message}`,
+      "queue",
+      "error",
+      {
+        operation: "initial-queue-processing",
+      },
+    );
     trackError(normalizedError, {
-      lifecycle: 'feeder',
-      operation: 'initial-queue-processing',
-    })
-  })
+      lifecycle: "feeder",
+      operation: "initial-queue-processing",
+    });
+  });
 
-  lifecycleDebug('Feeder started', 'feeder', 'info', {
+  lifecycleDebug("Feeder started", "feeder", "info", {
     refreshInterval,
     queueProcessInterval,
-  })
+  });
 }
 
 export function stopFeeder(config?: Config) {
   if (interval) {
-    clearInterval(interval)
-    interval = null
+    clearInterval(interval);
+    interval = null;
   }
   if (queueInterval) {
-    clearInterval(queueInterval)
-    queueInterval = null
+    clearInterval(queueInterval);
+    queueInterval = null;
   }
 
   if (config) {
-    const lifecycleDebug = createDebugWithContext(config, { lifecycle: 'feeder' })
-    lifecycleDebug('Feeder stopped', 'feeder', 'info')
+    const lifecycleDebug = createDebugWithContext(config, {
+      lifecycle: "feeder",
+    });
+    lifecycleDebug("Feeder stopped", "feeder", "info");
   }
 }
