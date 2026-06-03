@@ -47,7 +47,8 @@
     "@types/jest": "^30.0.0",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yml-register": "^1.2.5"
   },
   "scripts": {
     "test": "jest",

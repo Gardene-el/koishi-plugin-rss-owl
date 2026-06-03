@@ -79,6 +79,49 @@ export function getLastContent(item: any, _config: Config) {
   return { ...obj, description: String(obj?.description).replaceAll(/\s/g, '') }
 }
 
+function formatDebugDate(value: any): string {
+  const date = value instanceof Date ? value : new Date(value ?? 0)
+  return Number.isNaN(date.getTime()) ? 'invalid' : date.toISOString()
+}
+
+function getStoredTimestamp(value: any): number | undefined {
+  if (!value) return undefined
+
+  const date = value instanceof Date ? value : new Date(value)
+  const timestamp = date.getTime()
+
+  return Number.isNaN(timestamp) ? undefined : timestamp
+}
+
+function resolveLastPublishedTime(config: Config, rssItem: any, itemArray: any[], feedDebug: FeedDebugFn): number {
+  const directTimestamp = getStoredTimestamp(rssItem.lastPubDate)
+  if (directTimestamp !== undefined) {
+    return directTimestamp
+  }
+
+  const lastContentItems = rssItem.lastContent?.itemArray
+  if (!Array.isArray(lastContentItems) || lastContentItems.length === 0) {
+    return 0
+  }
+
+  const matchedItem = itemArray.find((item: any) => lastContentItems.some((old: any) =>
+    (old.guid && old.guid === item.guid)
+    || (old.link === item.link && old.title === item.title),
+  ))
+
+  if (!matchedItem) {
+    return 0
+  }
+
+  const recoveredTimestamp = parsePubDate(config, matchedItem.pubDate).getTime()
+  if (Number.isNaN(recoveredTimestamp)) {
+    return 0
+  }
+
+  feedDebug(`${rssItem.title}: Recovered invalid lastPubDate from lastContent as ${formatDebugDate(recoveredTimestamp)}`, 'feeder', 'info')
+  return recoveredTimestamp
+}
+
 /**
  * 抓取订阅的所有 RSS 条目。
  *
@@ -165,8 +208,9 @@ export function checkForUpdates(
 
   const latestItem = itemArray[0]
   const lastPubDate = parsePubDate(config, latestItem.pubDate)
+  const lastTime = resolveLastPublishedTime(config, rssItem, itemArray, feedDebug)
 
-  feedDebug(`${rssItem.title}: Latest item date=${lastPubDate.toISOString()}, DB date=${rssItem.lastPubDate ? new Date(rssItem.lastPubDate).toISOString() : 'none'}`, 'feeder', 'details')
+  feedDebug(`${rssItem.title}: Latest item date=${formatDebugDate(lastPubDate)}, DB date=${rssItem.lastPubDate ? formatDebugDate(rssItem.lastPubDate) : 'none'}, baseline=${lastTime > 0 ? formatDebugDate(lastTime) : 'none'}`, 'feeder', 'details')
 
   const currentContent = resendUpdatedContent === 'all'
     ? itemArray.map((item: any) => getLastContent(item, config))
@@ -185,9 +229,8 @@ export function checkForUpdates(
     feedDebug(`${rssItem.title}: Checking ${itemArray.length} items for updates`, 'feeder', 'details')
     rssItemArray = itemArray.filter((item, index) => {
       const currentItemTime = parsePubDate(config, item.pubDate).getTime()
-      const lastTime = rssItem.lastPubDate ? parsePubDate(config, rssItem.lastPubDate).getTime() : 0
 
-      feedDebug(`[${index}] ${item.title?.substring(0, 30)}: time=${new Date(currentItemTime).toISOString()} > last=${new Date(lastTime).toISOString()} ? ${currentItemTime > lastTime}`, 'feeder', 'details')
+      feedDebug(`[${index}] ${item.title?.substring(0, 30)}: time=${formatDebugDate(currentItemTime)} > last=${formatDebugDate(lastTime)} ? ${currentItemTime > lastTime}`, 'feeder', 'details')
 
       if (currentItemTime > lastTime) {
         feedDebug(`[${index}] ✓ Item is new (time check)`, 'feeder', 'details')

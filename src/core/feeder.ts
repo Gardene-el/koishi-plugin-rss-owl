@@ -171,8 +171,9 @@ export async function feeder(deps: FeederDependencies, processor: RssItemProcess
     } catch (err: any) {
       const normalizedError = normalizeError(err)
       const feedContext = buildFeedLogContext(rssItem)
+      const errorStack = normalizedError.stack || err?.stack
 
-      debug(config, `Feeder error for ${rssItem.url}: ${normalizedError.message}`, 'feeder', 'error', feedContext)
+      debug(config, `Feeder error for ${rssItem.url}: ${normalizedError.message}${errorStack ? `\n${errorStack}` : ''}`, 'feeder', 'error', feedContext)
       trackError(normalizedError, feedContext)
     }
   }

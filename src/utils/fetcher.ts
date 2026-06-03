@@ -111,7 +111,7 @@ export const createHttpFunction = (ctx: Context, config: Config, requestManager:
       let configObj: any = {
         timeout: requestTimeout,
         headers: {
-          'User-Agent': config.net.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': config.net?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
         // 允许传入自定义 proxyAgent
         ...(arg.proxyAgent?.enabled ? {} : {})
