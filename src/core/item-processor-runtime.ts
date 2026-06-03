@@ -1,55 +1,61 @@
-import * as cheerio from 'cheerio'
-import { Context, h } from 'koishi'
-import { marked } from 'marked'
+import * as cheerio from "cheerio";
+import { Context, h } from "koishi";
+import { marked } from "marked";
 
-import { Config, rssArg } from '../types'
-import { debug } from '../utils/logger'
-import { getImageUrl, getVideoUrl, puppeteerToFile } from '../utils/media'
-import { preprocessHtmlImages, renderHtml2Image } from './renderer'
+import { Config, rssArg } from "../types";
+import { debug } from "../utils/logger";
+import { getImageUrl, getVideoUrl, puppeteerToFile } from "../utils/media";
+import { preprocessHtmlImages, renderHtml2Image } from "./renderer";
 
 export interface ItemProcessorRuntimeDeps {
-  ctx: Context
-  config: Config
-  $http: any
+  ctx: Context;
+  config: Config;
+  $http: any;
 }
 
 interface RenderDescriptionOptions {
-  contentStyle?: string
-  dividerStyle?: string
-  logImageMode?: boolean
+  contentStyle?: string;
+  dividerStyle?: string;
+  logImageMode?: boolean;
+  skipAiSummarySection?: boolean;
 }
 
 function isImageRenderEnabled(config: Config): boolean {
-  return config.basic?.imageMode === 'base64'
-    || config.basic?.imageMode === 'File'
-    || config.basic?.imageMode === 'assets'
+  return (
+    config.basic?.imageMode === "base64" ||
+    config.basic?.imageMode === "File" ||
+    config.basic?.imageMode === "assets"
+  );
 }
 
 function collectUniqueImageSources(html: cheerio.CheerioAPI): string[] {
-  const imageSources: string[] = []
-  html('img').each((_: any, element: any) => {
-    const src = element.attribs?.src
-    if (src) imageSources.push(src)
-  })
-  return [...new Set(imageSources)]
+  const imageSources: string[] = [];
+  html("img").each((_: any, element: any) => {
+    const src = element.attribs?.src;
+    if (src) imageSources.push(src);
+  });
+  return [...new Set(imageSources)];
 }
 
 async function prependAiSummarySection(
   config: Config,
   htmlContent: string,
   item: any,
-  options?: Omit<RenderDescriptionOptions, 'logImageMode'>,
+  options?: Omit<RenderDescriptionOptions, "logImageMode">,
 ): Promise<string> {
-  const aiSummary = normalizeText(item?.aiSummary).trim()
-  if (!aiSummary || !isImageRenderEnabled(config)) return htmlContent
+  const aiSummary = normalizeText(item?.aiSummary).trim();
+  if (!aiSummary || !isImageRenderEnabled(config)) return htmlContent;
 
-  const aiSummaryHtml = await marked(aiSummary)
-  const contentStyleAttr = options?.contentStyle ? ` style="${options.contentStyle}"` : ''
+  const aiSummaryHtml = await marked(aiSummary);
+  const contentStyleAttr = options?.contentStyle
+    ? ` style="${options.contentStyle}"`
+    : "";
   const dividerAttr = options?.dividerStyle
     ? ` style="${options.dividerStyle}"`
-    : ' class="border-t border-slate-100 my-6"'
+    : ' class="border-t border-slate-100 my-6"';
 
-  return `
+  return (
+    `
       <div class="ai-summary-section mb-6">
         <div class="flex items-start gap-3 mb-3">
           <div class="mt-0.5 w-6 h-6 rounded-md bg-primary/10 flex flex-shrink-0 items-center justify-center">
@@ -65,6 +71,7 @@ async function prependAiSummarySection(
       </div>
       <div${dividerAttr}></div>
     ` + htmlContent
+  );
 }
 
 async function prepareHtmlForRender(
@@ -74,24 +81,48 @@ async function prepareHtmlForRender(
   useXml = false,
 ): Promise<string> {
   if (arg?.proxyAgent?.enabled) {
-    await Promise.all(html('img').map(async (_: any, element: any) => {
-      const src = element.attribs?.src
-      if (!src) return
-      element.attribs.src = await getImageUrl(deps.ctx, deps.config, deps.$http, src, arg, true)
-    }).get())
+    await Promise.all(
+      html("img")
+        .map(async (_: any, element: any) => {
+          const src = element.attribs?.src;
+          if (!src) return;
+          element.attribs.src = await getImageUrl(
+            deps.ctx,
+            deps.config,
+            deps.$http,
+            src,
+            arg,
+            true,
+          );
+        })
+        .get(),
+    );
   }
 
-  html('img').attr('style', 'object-fit:scale-down;max-width:100%;height:auto;')
-  return useXml ? html.xml() : html.html()
+  html("img").attr(
+    "style",
+    "object-fit:scale-down;max-width:100%;height:auto;",
+  );
+  return useXml ? html.xml() : html.html();
 }
 
 /**
  * 标准化 RSS 字段内容，统一数组 / 空值 / 非字符串输入。
  */
 export function normalizeText(value: unknown): string {
-  if (Array.isArray(value)) return value.join('')
-  if (value === undefined || value === null) return ''
+  if (Array.isArray(value)) return value.join("");
+  if (value === undefined || value === null) return "";
+  return String(value);
+}
+
+function decodeHtmlEntities(value: unknown): string {
   return String(value)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#96;/g, "`")
+    .replace(/&amp;/g, "&");
 }
 
 /**
@@ -102,13 +133,15 @@ export async function buildResolvedImageMap(
   html: cheerio.CheerioAPI,
   arg: rssArg,
 ): Promise<Record<string, string>> {
-  const imageSources = collectUniqueImageSources(html)
+  const imageSources = collectUniqueImageSources(html);
   return Object.assign(
     {},
-    ...(await Promise.all(imageSources.map(async (src) => ({
-      [src]: await getImageUrl(deps.ctx, deps.config, deps.$http, src, arg),
-    })))),
-  )
+    ...(await Promise.all(
+      imageSources.map(async (src) => ({
+        [src]: await getImageUrl(deps.ctx, deps.config, deps.$http, src, arg),
+      })),
+    )),
+  );
 }
 
 /**
@@ -119,15 +152,18 @@ export async function renderImageListFromHtml(
   html: cheerio.CheerioAPI,
   arg: rssArg,
 ): Promise<string> {
-  const imageSources = collectUniqueImageSources(html)
+  const imageSources = collectUniqueImageSources(html);
   const resolvedImages = await Promise.all(
-    imageSources.map(async (src) => await getImageUrl(deps.ctx, deps.config, deps.$http, src, arg)),
-  )
+    imageSources.map(
+      async (src) =>
+        await getImageUrl(deps.ctx, deps.config, deps.$http, src, arg),
+    ),
+  );
 
   return resolvedImages
     .filter(Boolean)
-    .map(imageUrl => `<img src="${imageUrl}"/>`)
-    .join('')
+    .map((imageUrl) => `<img src="${imageUrl}"/>`)
+    .join("");
 }
 
 /**
@@ -139,8 +175,8 @@ export async function renderLoadedHtml(
   arg: rssArg,
   useXml = false,
 ): Promise<string> {
-  const htmlContent = await prepareHtmlForRender(deps, html, arg, useXml)
-  return await renderImage(htmlContent, deps, arg)
+  const htmlContent = await prepareHtmlForRender(deps, html, arg, useXml);
+  return await renderImage(htmlContent, deps, arg);
 }
 
 /**
@@ -153,20 +189,35 @@ export async function renderTemplatedDescription(
   description: string,
   options?: RenderDescriptionOptions,
 ): Promise<string> {
-  item.description = description
-  debug(deps.config, item.description, 'description')
+  item.description = description;
+  debug(deps.config, item.description, "description");
 
-  item.description = await prependAiSummarySection(deps.config, item.description, item, {
-    contentStyle: options?.contentStyle,
-    dividerStyle: options?.dividerStyle,
-  })
-
-  const html = cheerio.load(item.description)
-  if (options?.logImageMode) {
-    debug(deps.config, `当前 imageMode: ${deps.config.basic?.imageMode}`, 'imageMode', 'info')
+  if (!options?.skipAiSummarySection) {
+    item.description = await prependAiSummarySection(
+      deps.config,
+      item.description,
+      item,
+      {
+        contentStyle: options?.contentStyle,
+        dividerStyle: options?.dividerStyle,
+      },
+    );
   }
 
-  return await renderLoadedHtml(deps, html, arg)
+  const html = cheerio.load(item.description);
+  if (item?.aiSummary && html(".rss-ai-rich").length) {
+    html(".rss-ai-rich").html(decodeHtmlEntities(item.aiSummary));
+  }
+  if (options?.logImageMode) {
+    debug(
+      deps.config,
+      `当前 imageMode: ${deps.config.basic?.imageMode}`,
+      "imageMode",
+      "info",
+    );
+  }
+
+  return await renderLoadedHtml(deps, html, arg);
 }
 
 /**
@@ -178,27 +229,49 @@ export async function processVideos(
   arg: rssArg,
   videoList: Array<[string, string]>,
 ): Promise<void> {
-  await Promise.all(html('video').map(async (_: any, element: any) => {
-    videoList.push([
-      await getVideoUrl(deps.ctx, deps.config, deps.$http, element.attribs.src, arg, true, element),
-      (element.attribs.poster && deps.config.basic?.usePoster)
-        ? await getImageUrl(deps.ctx, deps.config, deps.$http, element.attribs.poster, arg, true)
-        : '',
-    ])
-  }).get())
+  await Promise.all(
+    html("video")
+      .map(async (_: any, element: any) => {
+        videoList.push([
+          await getVideoUrl(
+            deps.ctx,
+            deps.config,
+            deps.$http,
+            element.attribs.src,
+            arg,
+            true,
+            element,
+          ),
+          element.attribs.poster && deps.config.basic?.usePoster
+            ? await getImageUrl(
+                deps.ctx,
+                deps.config,
+                deps.$http,
+                element.attribs.poster,
+                arg,
+                true,
+              )
+            : "",
+        ]);
+      })
+      .get(),
+  );
 }
 
 /**
  * 将视频列表格式化为最终消息片段。
  */
 export function formatVideoList(videoList: Array<[string, string]>): string {
-  return videoList.filter(([src]) => src).map(([src, poster]) => {
-    if (src.startsWith('__VIDEO_LINK__:')) {
-      const videoUrl = src.replace('__VIDEO_LINK__:', '')
-      return `\n🎬 视频: ${videoUrl}\n`
-    }
-    return h('video', { src, poster })
-  }).join('')
+  return videoList
+    .filter(([src]) => src)
+    .map(([src, poster]) => {
+      if (src.startsWith("__VIDEO_LINK__:")) {
+        const videoUrl = src.replace("__VIDEO_LINK__:", "");
+        return `\n🎬 视频: ${videoUrl}\n`;
+      }
+      return h("video", { src, poster });
+    })
+    .join("");
 }
 
 /**
@@ -209,39 +282,76 @@ export async function renderImage(
   deps: ItemProcessorRuntimeDeps,
   arg: rssArg,
 ): Promise<string> {
-  const imageMode = deps.config.basic?.imageMode
+  const imageMode = deps.config.basic?.imageMode;
 
-  if (imageMode === 'base64') {
-    debug(deps.config, '使用 base64 模式渲染', 'render mode', 'info')
-    return (await renderHtml2Image(deps.ctx, deps.config, deps.$http, htmlContent, arg)).toString()
+  if (imageMode === "base64") {
+    debug(deps.config, "使用 base64 模式渲染", "render mode", "info");
+    return (
+      await renderHtml2Image(
+        deps.ctx,
+        deps.config,
+        deps.$http,
+        htmlContent,
+        arg,
+      )
+    ).toString();
   }
 
-  if (imageMode === 'File' || imageMode === 'assets') {
+  if (imageMode === "File" || imageMode === "assets") {
     if (!deps.ctx.puppeteer) {
-      debug(deps.config, '未安装 puppeteer 插件，跳过图片渲染', 'puppeteer error', 'error')
-      return htmlContent
+      debug(
+        deps.config,
+        "未安装 puppeteer 插件，跳过图片渲染",
+        "puppeteer error",
+        "error",
+      );
+      return htmlContent;
     }
 
     try {
-      debug(deps.config, `使用 ${imageMode} 模式渲染`, 'render mode', 'info')
-      const processedHtml = await preprocessHtmlImages(deps.ctx, deps.config, deps.$http, htmlContent, arg)
+      debug(deps.config, `使用 ${imageMode} 模式渲染`, "render mode", "info");
+      const processedHtml = await preprocessHtmlImages(
+        deps.ctx,
+        deps.config,
+        deps.$http,
+        htmlContent,
+        arg,
+      );
 
-      let msg: string
+      let msg: string;
       if ((deps.config.template?.deviceScaleFactor ?? 1) !== 1) {
-        msg = (await renderHtml2Image(deps.ctx, deps.config, deps.$http, processedHtml, arg)).toString()
+        msg = (
+          await renderHtml2Image(
+            deps.ctx,
+            deps.config,
+            deps.$http,
+            processedHtml,
+            arg,
+          )
+        ).toString();
       } else {
-        msg = await deps.ctx.puppeteer.render(processedHtml)
+        msg = await deps.ctx.puppeteer.render(processedHtml);
       }
 
-      msg = await puppeteerToFile(deps.ctx, deps.config, msg)
-      debug(deps.config, 'puppeteer 渲染完成', 'render success', 'info')
-      return msg
+      msg = await puppeteerToFile(deps.ctx, deps.config, msg);
+      debug(deps.config, "puppeteer 渲染完成", "render success", "info");
+      return msg;
     } catch (error) {
-      debug(deps.config, `puppeteer render 失败: ${error}`, 'puppeteer error', 'error')
-      return htmlContent
+      debug(
+        deps.config,
+        `puppeteer render 失败: ${error}`,
+        "puppeteer error",
+        "error",
+      );
+      return htmlContent;
     }
   }
 
-  debug(deps.config, `未知的 imageMode: ${imageMode}，回退到 HTML`, 'render warning', 'error')
-  return htmlContent
+  debug(
+    deps.config,
+    `未知的 imageMode: ${imageMode}，回退到 HTML`,
+    "render warning",
+    "error",
+  );
+  return htmlContent;
 }
