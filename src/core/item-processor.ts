@@ -43,6 +43,21 @@ function escapeHtmlAttr(value: unknown): string {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
+function buildFallbackAiSummaryHtml(value: unknown): string {
+  const plainText = cheerio
+    .load(`<div>${normalizeText(value)}</div>`)
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!plainText) return "";
+
+  const excerpt =
+    plainText.length > 260 ? `${plainText.slice(0, 260).trim()}...` : plainText;
+
+  return `<p class="rss-ai-lead">${escapeHtml(excerpt)}</p>`;
+}
+
 function isRenderableSectionImage(url: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
   return !/\.(mp4|webm|mov|m4v|avi|mkv)(?:[?#]|$)/i.test(url);
@@ -986,6 +1001,11 @@ export class RssItemProcessor {
         aiSummary = htmlSummary || transformStructuredSummaryToHtml(rawSummary);
         aiSummary = applySectionMediaFromSource(aiSummary, aiSourceHtml);
         formattedAiSummary = `🤖 AI摘要：\n${rawSummary}`;
+        item.aiSummary = aiSummary;
+      } else {
+        aiSummary = buildFallbackAiSummaryHtml(
+          aiSourceHtml || item.description,
+        );
         item.aiSummary = aiSummary;
       }
     }

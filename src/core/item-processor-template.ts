@@ -32,6 +32,32 @@ interface ProcessItemTemplateParams {
 
 type ParseContentFn = (templateStr: string, itemObj: any) => string;
 
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildFallbackSummaryHtml(description: unknown): string {
+  const plainText = normalizeText(
+    cheerio.load(`<div>${normalizeText(description)}</div>`).text(),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!plainText) {
+    return '<p class="rss-ai-lead">原文摘要暂不可用，请点击下方链接查看完整内容。</p>';
+  }
+
+  const excerpt =
+    plainText.length > 220 ? `${plainText.slice(0, 220).trim()}...` : plainText;
+
+  return `<p class="rss-ai-lead">${escapeHtml(excerpt)}</p>`;
+}
+
 async function processCustomTemplate(
   deps: ItemProcessorRuntimeDeps,
   item: any,
@@ -40,9 +66,13 @@ async function processCustomTemplate(
 ): Promise<string> {
   const customTemplate = deps.config.template?.custom || "";
   const summaryPlaceholder = "__AI_SUMMARY_HTML__";
+  const fallbackSummaryHtml = buildFallbackSummaryHtml(item?.description);
   let description = parseContent(customTemplate, { ...item, arg });
   if (description.includes(summaryPlaceholder)) {
-    description = description.replace(summaryPlaceholder, item.aiSummary || "");
+    description = description.replace(
+      summaryPlaceholder,
+      item.aiSummary || fallbackSummaryHtml,
+    );
   }
   const renderedDescription = await renderTemplatedDescription(
     deps,
